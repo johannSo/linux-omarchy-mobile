@@ -77,6 +77,15 @@ config QCOM_OCMEM
 	  requirements. This is typically used by the GPU, camera/video, and
 	  audio components on some Snapdragon SoCs.
 
+config QCOM_ONEPLUS_PROJECT_INFO
+	tristate "OnePlus SM8150 project info for the modem"
+	depends on QCOM_SMEM
+	help
+	  OnePlus 7/7T series phones: complete the "project info" SMEM item
+	  the bootloader leaves for the modem by setting the RF test cable
+	  state, as OnePlus's own kernel does. Without it the modem assumes
+	  cables are plugged into its RF test connectors.
+
 config QCOM_PD_MAPPER
 	tristate "Qualcomm Protection Domain Mapper"
 	select QCOM_QMI_HELPERS
