@@ -485,6 +485,29 @@
 };
 
 /*
+ * WCN3990 rails from downstream's icnss node: cx-mx L1A (0.752 V), xo L7A
+ * (1.8 V), rfa L2C (1.304 V), ch0 L11C (3.104-3.312 V; downstream BT asks for
+ * 3.312 V on the same LDO). No ch1. MSA is wlan_mem, the same 0x180000 at
+ * 0x8bc00000 as downstream's qcom,wlan-msa-fixed-region. Its firmware
+ * (wlanmdsp.mbn) is loaded by the modem over tqftpserv; the board data
+ * is looked up as variant oneplus_hotdog in ath10k's board-2.bin.
+ */
+&vreg_l11c_3p3 {
+	regulator-min-microvolt = <3104000>;
+};
+
+&wifi {
+	vdd-0.8-cx-mx-supply = <&vreg_l1a_0p75>;
+	vdd-1.8-xo-supply = <&vreg_l7a_1p8>;
+	vdd-1.3-rfa-supply = <&vreg_l2c_1p3>;
+	vdd-3.3-ch0-supply = <&vreg_l11c_3p3>;
+
+	qcom,calibration-variant = "oneplus_hotdog";
+
+	status = "okay";
+};
+
+/*
  * WCN3990 Bluetooth on QUP SE13 as a 4-wire UART (downstream
  * qupv3_se13_4uart, wake IRQ on RX GPIO 46), powered from the same rails as
  * Wi-Fi. Firmware is stock's bluetooth_a image: crbtfw21.tlv and the NVM
