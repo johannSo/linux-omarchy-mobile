@@ -190,16 +190,22 @@ out:
 	return err;
 }
 
-static int qca_read_fw_board_id(struct hci_dev *hdev, u16 *bid)
+static int qca_read_fw_board_id(struct hci_dev *hdev, u16 *bid,
+				enum qca_btsoc_type soc_type)
 {
 	u8 cmd;
 	struct sk_buff *skb;
 	struct edl_event_hdr *edl;
 	int err = 0;
+	u8 event_type = 0;
+
+	/* Like the version request, SoCs before WCN3991 answer in a VSE. */
+	if (soc_type < QCA_WCN3991)
+		event_type = HCI_EV_VENDOR;
 
 	cmd = EDL_GET_BID_REQ_CMD;
 	skb = __hci_cmd_sync_ev(hdev, EDL_PATCH_CMD_OPCODE, EDL_PATCH_CMD_LEN,
-				&cmd, 0, HCI_INIT_TIMEOUT);
+				&cmd, event_type, HCI_INIT_TIMEOUT);
 	if (IS_ERR(skb)) {
 		err = PTR_ERR(skb);
 		bt_dev_err(hdev, "Reading QCA board ID failed (%d)", err);
@@ -860,7 +866,7 @@ int qca_uart_setup(struct hci_dev *hdev, uint8_t baudrate,
 	msleep(10);
 
 	if (soc_type == QCA_QCA2066 || soc_type == QCA_WCN7850)
-		qca_read_fw_board_id(hdev, &boardid);
+		qca_read_fw_board_id(hdev, &boardid, soc_type);
 
 	/* Download NVM configuration */
 	config.type = TLV_TYPE_NVM;
@@ -869,7 +875,7 @@ int qca_uart_setup(struct hci_dev *hdev, uint8_t baudrate,
 		if (qca_filename_has_extension(firmware_name)) {
 			snprintf(config.fwname, sizeof(config.fwname), "qca/%s", firmware_name);
 		} else {
-			qca_read_fw_board_id(hdev, &boardid);
+			qca_read_fw_board_id(hdev, &boardid, soc_type);
 			qca_get_nvm_name_by_board(config.fwname, sizeof(config.fwname),
 				 firmware_name, soc_type, ver, 0, boardid);
 		}
@@ -912,7 +918,7 @@ int qca_uart_setup(struct hci_dev *hdev, uint8_t baudrate,
 				 "qca/msnv%02x.bin", rom_ver);
 			break;
 		case QCA_WCN6855:
-			qca_read_fw_board_id(hdev, &boardid);
+			qca_read_fw_board_id(hdev, &boardid, soc_type);
 			qca_get_nvm_name_by_board(config.fwname, sizeof(config.fwname),
 						  "wcnhpnv", soc_type, ver, rom_ver, boardid);
 			break;
@@ -927,6 +933,13 @@ int qca_uart_setup(struct hci_dev *hdev, uint8_t baudrate,
 	}
 
 	err = qca_download_firmware(hdev, &config, soc_type, rom_ver);
+	if (err == -ENOENT && firmware_name && boardid &&
+	    !qca_filename_has_extension(firmware_name)) {
+		/* No NVM for this board: use the default one, as Android does. */
+		qca_get_nvm_name_by_board(config.fwname, sizeof(config.fwname),
+				 firmware_name, soc_type, ver, 0, 0);
+		err = qca_download_firmware(hdev, &config, soc_type, rom_ver);
+	}
 	if (err < 0 && !firmware_name && soc_type == QCA_WCN6855) {
 		qca_get_nvm_name_by_board(config.fwname, sizeof(config.fwname),
 					  "hpnv", soc_type, ver, rom_ver, boardid);
