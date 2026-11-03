@@ -466,6 +466,21 @@
 };
 
 /*
+ * IPA v4.1. Downstream's ipa3 loads the GSI firmware from the AP (PIL
+ * "ipa_fws", PAS 15) on this SoC, so do that here too. The second SMMU stream
+ * is the IPA microcontroller's (downstream ipa_smmu_uc 0x522); sm8150.dtsi
+ * lists the WLAN one (0x521) instead.
+ */
+&ipa {
+	qcom,gsi-loader = "self";
+	memory-region = <&ipa_fw_mem>;
+	firmware-name = "qcom/sm8150/oneplus/hotdog/ipa_fws.mbn";
+	iommus = <&apps_smmu 0x520 0x0>,
+		 <&apps_smmu 0x522 0x0>;
+	status = "okay";
+};
+
+/*
  * Remote processors, squashed .mbn from the phone's modem partition. A missing
  * file just leaves the remoteproc offline. The modem doesn't boot by itself
  * (auto_boot off): rmtfs starts it once it serves the EFS partitions.
