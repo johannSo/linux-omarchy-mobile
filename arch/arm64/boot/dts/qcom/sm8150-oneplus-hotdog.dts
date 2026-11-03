@@ -27,6 +27,7 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/leds/common.h>
+#include <dt-bindings/sound/qcom,q6asm.h>
 #include <dt-bindings/media/video-interfaces.h>
 #include "sm8150-oneplus-common.dtsi"
 
@@ -545,6 +546,122 @@
 };
 
 /*
+ * Speakers: two NXP TFA9874 amps on QUP SE4 I2C (downstream qupv3_se4_i2c,
+ * reset GPIOs 37 and 100, active high), fed by the ADSP over quaternary MI2S
+ * (SCK GPIO 137, WS 138; audio on SD1, GPIO 140, as downstream's dai_mi2s3
+ * rx-lines; the amps' sense data would come back on SD0). 0x34 is the
+ * earpiece at the top (the only one with a receiver profile), playing the
+ * left I2S channel; 0x35 is the bottom speaker, playing the right one.
+ *
+ * nxp,init-bitfields replay the device and "speaker" profile settings of
+ * OnePlus's tfa98xx.cnt (NXP bitfield IDs: 32-bit slots, 64 BCLK per frame,
+ * slot assignment, DC-DC booster, gains). Speaker protection ran on the ADSP
+ * under Android (NXP's TFADSP); it doesn't here.
+ */
+&i2c4 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	speaker_top: audio-codec@34 {
+		compatible = "nxp,tfa9874";
+		reg = <0x34>;
+		reset-gpios = <&tlmm 37 GPIO_ACTIVE_HIGH>;
+		#sound-dai-cells = <0>;
+		sound-name-prefix = "Top";
+		nxp,init-bitfields = <0x20c3 2>, <0x2144 31>, <0x2224 31>, <0x2330 1>,
+				     <0x2340 0>, <0x6802 3>, <0x0401 1>, <0x2310 1>,
+				     <0x6163 4>, <0x6123 15>, <0x6831 1>, <0x6851 2>,
+				     <0x0255 22>, <0x5257 190>, <0x5350 1>, <0x64e1 2>,
+				     <0x5690 0>, <0x6f02 5>, <0x6f72 1>, <0x7071 3>,
+				     <0x7430 1>, <0x7494 8>, <0x75f0 1>, <0x74f0 0>,
+				     <0x8001 0>, <0x8305 25>, <0x8364 30>, <0x8453 4>,
+				     <0x5150 0>, <0x5844 1>, <0x6f50 1>, <0x8510 1>,
+				     <0x8530 0>, <0x8540 0>, <0x8801 2>, <0x8440 0>,
+				     <0xc4d0 0>, <0xb050 0>, <0x7444 10>, <0x7534 5>,
+				     <0x7584 16>, <0x7635 30>, <0x7695 63>, <0x0040 1>,
+				     <0x0240 0>, <0x62e1 0>, <0x2603 0>, <0x2643 1>,
+				     <0x26c3 0>, <0x2703 1>, <0x7033 11>;
+	};
+
+	speaker_bottom: audio-codec@35 {
+		compatible = "nxp,tfa9874";
+		reg = <0x35>;
+		reset-gpios = <&tlmm 100 GPIO_ACTIVE_HIGH>;
+		#sound-dai-cells = <0>;
+		sound-name-prefix = "Bottom";
+		nxp,init-bitfields = <0x20c3 2>, <0x2144 31>, <0x2224 31>, <0x2330 1>,
+				     <0x2340 0>, <0x6802 3>, <0x0401 1>, <0x2310 1>,
+				     <0x6163 4>, <0x6123 15>, <0x6831 1>, <0x6851 2>,
+				     <0x0255 22>, <0x5257 190>, <0x5350 1>, <0x64e1 2>,
+				     <0x5690 0>, <0x6f02 5>, <0x6f72 1>, <0x7071 3>,
+				     <0x7430 1>, <0x7494 8>, <0x75f0 1>, <0x74f0 0>,
+				     <0x8001 0>, <0x8305 25>, <0x8364 30>, <0x8453 4>,
+				     <0x5150 0>, <0x5844 1>, <0x6f50 1>, <0x8510 1>,
+				     <0x8530 0>, <0x8540 0>, <0x8801 2>, <0x8440 0>,
+				     <0xc4d0 0>, <0xb050 0>, <0x7444 10>, <0x7534 5>,
+				     <0x7584 16>, <0x7635 30>, <0x7695 63>, <0x0040 1>,
+				     <0x0240 0>, <0x62e1 0>, <0x2603 1>, <0x2643 0>,
+				     <0x26c3 1>, <0x2703 0>, <0x7033 10>;
+	};
+};
+
+&q6afedai {
+	dai@22 {
+		reg = <QUATERNARY_MI2S_RX>;
+		qcom,sd-lines = <1>;
+	};
+};
+
+&q6asmdai {
+	dai@0 {
+		reg = <MSM_FRONTEND_DAI_MULTIMEDIA1>;
+	};
+
+	dai@1 {
+		reg = <MSM_FRONTEND_DAI_MULTIMEDIA2>;
+	};
+};
+
+&sound {
+	compatible = "qcom,sm8150-sndcard";
+	model = "OnePlus 7T Pro";
+	pinctrl-names = "default";
+	pinctrl-0 = <&quat_mi2s_active &quat_mi2s_sd0_active &quat_mi2s_sd1_active>;
+
+	mm1-dai-link {
+		link-name = "MultiMedia1";
+
+		cpu {
+			sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA1>;
+		};
+	};
+
+	mm2-dai-link {
+		link-name = "MultiMedia2";
+
+		cpu {
+			sound-dai = <&q6asmdai MSM_FRONTEND_DAI_MULTIMEDIA2>;
+		};
+	};
+
+	speaker-dai-link {
+		link-name = "Speaker Playback";
+
+		cpu {
+			sound-dai = <&q6afedai QUATERNARY_MI2S_RX>;
+		};
+
+		platform {
+			sound-dai = <&q6routing>;
+		};
+
+		codec {
+			sound-dai = <&speaker_top>, <&speaker_bottom>;
+		};
+	};
+};
+
+/*
  * WCN3990 rails from downstream's icnss node: cx-mx L1A (0.752 V), xo L7A
  * (1.8 V), rfa L2C (1.304 V), ch0 L11C (3.104-3.312 V; downstream BT asks for
  * 3.312 V on the same LDO). No ch1. MSA is wlan_mem, the same 0x180000 at
@@ -655,6 +772,29 @@
 		function = "mdp_vsync";
 		drive-strength = <2>;
 		bias-pull-down;
+	};
+
+	/* Pin settings from downstream's quat_mi2s*_active states. */
+	quat_mi2s_active: quat-mi2s-active-state {
+		pins = "gpio137", "gpio138";
+		function = "qua_mi2s";
+		drive-strength = <8>;
+		bias-disable;
+		output-high;
+	};
+
+	quat_mi2s_sd0_active: quat-mi2s-sd0-active-state {
+		pins = "gpio139";
+		function = "qua_mi2s";
+		drive-strength = <8>;
+		bias-disable;
+	};
+
+	quat_mi2s_sd1_active: quat-mi2s-sd1-active-state {
+		pins = "gpio140";
+		function = "qua_mi2s";
+		drive-strength = <8>;
+		bias-disable;
 	};
 
 	qup_uart13_default: qup-uart13-default-state {
