@@ -454,11 +454,25 @@ static int ipa_modem_notify(struct notifier_block *nb, unsigned long action,
 	struct ipa *ipa = container_of(nb, struct ipa, nb);
 	struct qcom_ssr_notify_data *notify_data = data;
 	struct device *dev = ipa->dev;
+	int ret;
 
 	switch (action) {
 	case QCOM_SSR_BEFORE_POWERUP:
 		dev_info(dev, "received modem starting event\n");
 		ipa_uc_power(ipa);
+		/* ipa_uc_power() only takes its proxy reference on the first
+		 * modem boot. A restarted modem touches IPA while it boots
+		 * too, and on SM8150 an unclocked IPA then hangs the bus.
+		 * Downstream votes IPA clocks on every modem power-up.
+		 */
+		if (!ipa->modem_proxy) {
+			ret = pm_runtime_resume_and_get(dev);
+			if (ret)
+				dev_err(dev, "error %d taking modem proxy power\n",
+					ret);
+			else
+				ipa->modem_proxy = true;
+		}
 		ipa_smp2p_notify_reset(ipa);
 		break;
 
@@ -475,6 +489,10 @@ static int ipa_modem_notify(struct notifier_block *nb, unsigned long action,
 
 	case QCOM_SSR_AFTER_SHUTDOWN:
 		dev_info(dev, "received modem offline event\n");
+		if (ipa->modem_proxy) {
+			ipa->modem_proxy = false;
+			(void)pm_runtime_put_autosuspend(dev);
+		}
 		break;
 
 	default:
