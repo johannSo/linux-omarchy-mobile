@@ -1010,6 +1010,20 @@ config DRM_PANEL_SAMSUNG_S6E3FA7
 	  Say Y here if you want to enable support for the Samsung S6E3FA7
 	  1920x2220 panel.
 
+config DRM_PANEL_SAMSUNG_ONEPLUS_DSC
+	tristate "Samsung DSC command mode panel of the OnePlus 7 Pro and 7T Pro"
+	depends on OF
+	depends on DRM_MIPI_DSI
+	depends on BACKLIGHT_CLASS_DEVICE
+	select DRM_DISPLAY_DSC_HELPER
+	select DRM_DISPLAY_HELPER
+	help
+	  Say Y or M here if you want to enable support for the Samsung
+	  1440x3120 AMOLED command mode panel with DSC found in the OnePlus
+	  7 Pro (guacamole) and 7T Pro (hotdog). It runs in DSI command mode
+	  with DSC 1.1 and has its own DCS backlight, with a high brightness
+	  mode for the under-display fingerprint sensor.
+
 config DRM_PANEL_SAMSUNG_S6D16D0
 	tristate "Samsung S6D16D0 DSI video mode panel"
 	depends on OF
