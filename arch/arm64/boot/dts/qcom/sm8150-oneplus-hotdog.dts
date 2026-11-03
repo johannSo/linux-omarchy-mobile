@@ -88,6 +88,7 @@
 
 	aliases {
 		display0 = &framebuffer0;
+		hsuart0 = &uart13;
 	};
 
 	/*
@@ -483,6 +484,34 @@
 	status = "okay";
 };
 
+/*
+ * WCN3990 Bluetooth on QUP SE13 as a 4-wire UART (downstream
+ * qupv3_se13_4uart, wake IRQ on RX GPIO 46), powered from the same rails as
+ * Wi-Fi. Firmware is stock's bluetooth_a image: crbtfw21.tlv and the NVM
+ * picked by board ID (crnv21.bXX, else crnv21.bin), as Android does.
+ */
+&uart13 {
+	/delete-property/ interrupts;
+	interrupts-extended = <&intc GIC_SPI 585 IRQ_TYPE_LEVEL_HIGH>,
+			      <&tlmm 46 IRQ_TYPE_EDGE_FALLING>;
+
+	pinctrl-names = "default", "sleep";
+	pinctrl-0 = <&qup_uart13_default>;
+	pinctrl-1 = <&qup_uart13_sleep>;
+
+	status = "okay";
+
+	bluetooth: bluetooth {
+		compatible = "qcom,wcn3998-bt";
+		vddio-supply = <&vreg_l1a_0p75>;
+		vddxo-supply = <&vreg_l7a_1p8>;
+		vddrf-supply = <&vreg_l2c_1p3>;
+		vddch0-supply = <&vreg_l11c_3p3>;
+		max-speed = <3200000>;
+		firmware-name = "crnv21", "crbtfw21.tlv";
+	};
+};
+
 &tlmm {
 	alert_slider_default: alert-slider-default-state {
 		pins = "gpio27", "gpio125", "gpio134";
@@ -543,5 +572,30 @@
 		function = "mdp_vsync";
 		drive-strength = <2>;
 		bias-pull-down;
+	};
+
+	qup_uart13_default: qup-uart13-default-state {
+		pins = "gpio43", "gpio44", "gpio45", "gpio46";
+		function = "qup13";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	/* Pulls from downstream's qupv3_se13 sleep states. */
+	qup_uart13_sleep: qup-uart13-sleep-state {
+		pinmux {
+			pins = "gpio43", "gpio44", "gpio45", "gpio46";
+			function = "gpio";
+		};
+
+		pinconf-cts-rts {
+			pins = "gpio43", "gpio44";
+			bias-pull-down;
+		};
+
+		pinconf-tx-rx {
+			pins = "gpio45", "gpio46";
+			bias-pull-up;
+		};
 	};
 };
