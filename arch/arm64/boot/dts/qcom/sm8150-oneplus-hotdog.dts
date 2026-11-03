@@ -247,3 +247,65 @@
 	firmware-name = "qcom/sm8150/oneplus/hotdog/slpi.mbn";
 	status = "disabled";
 };
+
+/*
+ * Display: Samsung 1440x3120 AMOLED, command mode, DSC with two encoders on
+ * one 4-lane DSI link (downstream topology <2 2 1>). Pins and supply from
+ * downstream dsi_samsung_oneplus_dsc_cmd: reset GPIO 6, TE GPIO 8, vddio
+ * from L14A; the other rails are switched by the panel itself.
+ */
+&mdss {
+	status = "okay";
+};
+
+&mdss_mdp {
+	status = "okay";
+};
+
+&mdss_dsi0 {
+	vdda-supply = <&vreg_l3c_1p2>;
+	status = "okay";
+
+	panel@0 {
+		compatible = "samsung,oneplus-dsc";
+		reg = <0>;
+
+		vddio-supply = <&vreg_l14a_1p8>;
+		reset-gpios = <&tlmm 6 GPIO_ACTIVE_LOW>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&panel_reset_default &mdss_te_default>;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&mdss_dsi0_out>;
+			};
+		};
+	};
+};
+
+&mdss_dsi0_out {
+	data-lanes = <0 1 2 3>;
+	remote-endpoint = <&panel_in>;
+};
+
+&mdss_dsi0_phy {
+	vdds-supply = <&vreg_l5a_0p875>;
+	status = "okay";
+};
+
+&tlmm {
+	panel_reset_default: panel-reset-default-state {
+		pins = "gpio6";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
+	};
+
+	mdss_te_default: mdss-te-default-state {
+		pins = "gpio8";
+		function = "mdp_vsync";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+};
