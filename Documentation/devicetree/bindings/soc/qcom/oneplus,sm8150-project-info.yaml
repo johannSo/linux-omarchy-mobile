@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/soc/qcom/oneplus,sm8150-project-info.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: OnePlus SM8150 project info for the modem
+
+maintainers:
+  - johannSo <jzeug@soppa.de>
+
+description:
+  OnePlus's bootloader on the OnePlus 7 series leaves a project info item
+  in SMEM (item 136) that the modem reads. OnePlus's kernel completes it
+  with the state of the phone's RF test cable detection; without it the
+  modem assumes cables are plugged into its RF test connectors.
+
+properties:
+  compatible:
+    const: oneplus,sm8150-project-info
+
+  oneplus,rf-cable-state:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    enum: [0, 1]
+    default: 1
+    description:
+      The RF test cable state to report, 1 for no cable plugged in.
+
+required:
+  - compatible
+
+additionalProperties: false
+
+examples:
+  - |
+    project-info {
+        compatible = "oneplus,sm8150-project-info";
+    };
+...
