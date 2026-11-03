@@ -181,6 +181,20 @@
 		pinctrl-names = "default";
 	};
 
+	/*
+	 * 4085mAh typ. (gauge design capacity 4040mAh). Float voltage 4.35V,
+	 * the value OnePlus's bootloader leaves in the charger (FLOAT_VOLTAGE_CFG
+	 * 0x4b); downstream runs 4.365-4.39V by temperature region. The DCP
+	 * input current stays below downstream's 1.8A usb-icl.
+	 */
+	battery: battery {
+		compatible = "simple-battery";
+		charge-full-design-microamp-hours = <4040000>;
+		voltage-min-design-microvolt = <3400000>;
+		voltage-max-design-microvolt = <4350000>;
+		constant-charge-current-max-microamp = <1500000>;
+	};
+
 	chosen {
 		#address-cells = <2>;
 		#size-cells = <2>;
@@ -390,6 +404,15 @@
 		led-sources = <1>, <2>;
 		led-max-microamp = <600000>;
 	};
+};
+
+/*
+ * Plain USB charging (SDP 0.5A, CDP/DCP 1.5A input; fast charge current 1.95A).
+ * Hardware JEITA stays as the bootloader configured it. No Warp/Dash.
+ */
+&pm8150b_charger {
+	monitored-battery = <&battery>;
+	status = "okay";
 };
 
 /* Downstream qupv3_se8_i2c: fuel gauge and OnePlus's fast-charge MCU. */
