@@ -171,6 +171,19 @@
 	mode-recovery = <0x1>;
 };
 
+&gmu {
+	status = "okay";
+};
+
+&gpu {
+	status = "okay";
+};
+
+/* From the phone's own vendor partition (/vendor/firmware/a640_zap.*). */
+&gpu_zap_shader {
+	firmware-name = "qcom/sm8150/oneplus/hotdog/a640_zap.mbn";
+};
+
 /* Downstream qupv3_se8_i2c: fuel gauge and OnePlus's fast-charge MCU. */
 &i2c8 {
 	clock-frequency = <100000>;
