@@ -3198,10 +3198,13 @@ static void ath10k_bss_disassoc(struct ieee80211_hw *hw,
 	ath10k_dbg(ar, ATH10K_DBG_MAC, "mac vdev %i disassoc bssid %pM\n",
 		   arvif->vdev_id, arvif->bssid);
 
-	ret = ath10k_wmi_vdev_down(ar, arvif->vdev_id);
-	if (ret)
-		ath10k_warn(ar, "failed to down vdev %i: %d\n",
-			    arvif->vdev_id, ret);
+	/* A delayed start is undone, down included, with the BSS peer. */
+	if (!ar->hw_params.vdev_start_delay || arvif->is_started) {
+		ret = ath10k_wmi_vdev_down(ar, arvif->vdev_id);
+		if (ret)
+			ath10k_warn(ar, "failed to down vdev %i: %d\n",
+				    arvif->vdev_id, ret);
+	}
 
 	arvif->def_wep_key_idx = -1;
 
@@ -7498,6 +7501,103 @@ static void ath10k_mac_vif_stations_tid_conf(void *data,
 	ieee80211_queue_work(iter_data->ar->hw, &arsta->tid_config_wk);
 }
 
+/* WCN3990 firmware (seen with WLAN.HL.3.2) answers a vdev start for a
+ * station vdev without any peer with status -1. mac80211 assigns the channel
+ * context before it adds the AP station, so the start is delayed until the
+ * BSS peer exists, like the vendor driver orders it.
+ */
+static bool ath10k_mac_vif_start_delayed(struct ath10k_vif *arvif)
+{
+	struct ath10k *ar = arvif->ar;
+	struct ath10k_peer *peer;
+	bool has_peer = false;
+
+	lockdep_assert_held(&ar->conf_mutex);
+
+	if (!ar->hw_params.vdev_start_delay ||
+	    arvif->vdev_type != WMI_VDEV_TYPE_STA)
+		return false;
+
+	spin_lock_bh(&ar->data_lock);
+	list_for_each_entry(peer, &ar->peers, list) {
+		if (peer->vdev_id == arvif->vdev_id) {
+			has_peer = true;
+			break;
+		}
+	}
+	spin_unlock_bh(&ar->data_lock);
+
+	return !has_peer;
+}
+
+static int ath10k_mac_vif_start(struct ath10k_vif *arvif,
+				const struct cfg80211_chan_def *def)
+{
+	struct ath10k *ar = arvif->ar;
+	struct ieee80211_vif *vif = arvif->vif;
+	int ret;
+
+	lockdep_assert_held(&ar->conf_mutex);
+
+	if (WARN_ON(arvif->is_started))
+		return -EBUSY;
+
+	ret = ath10k_vdev_start(arvif, def);
+	if (ret) {
+		ath10k_warn(ar, "failed to start vdev %i addr %pM on freq %d: %d\n",
+			    arvif->vdev_id, vif->addr,
+			    def->chan->center_freq, ret);
+		return ret;
+	}
+
+	arvif->is_started = true;
+
+	ret = ath10k_mac_vif_setup_ps(arvif);
+	if (ret) {
+		ath10k_warn(ar, "failed to update vdev %i ps: %d\n",
+			    arvif->vdev_id, ret);
+		goto err_stop;
+	}
+
+	if (vif->type == NL80211_IFTYPE_MONITOR) {
+		ret = ath10k_wmi_vdev_up(ar, arvif->vdev_id, 0, vif->addr);
+		if (ret) {
+			ath10k_warn(ar, "failed to up monitor vdev %i: %d\n",
+				    arvif->vdev_id, ret);
+			goto err_stop;
+		}
+
+		arvif->is_up = true;
+	}
+
+	if (ath10k_mac_can_set_cts_prot(arvif)) {
+		ret = ath10k_mac_set_cts_prot(arvif);
+		if (ret)
+			ath10k_warn(ar, "failed to set cts protection for vdev %d: %d\n",
+				    arvif->vdev_id, ret);
+	}
+
+	if (ath10k_peer_stats_enabled(ar) &&
+	    ar->hw_params.tx_stats_over_pktlog) {
+		ar->pktlog_filter |= ATH10K_PKTLOG_PEER_STATS;
+		ret = ath10k_wmi_pdev_pktlog_enable(ar,
+						    ar->pktlog_filter);
+		if (ret) {
+			ath10k_warn(ar, "failed to enable pktlog %d\n", ret);
+			goto err_stop;
+		}
+	}
+
+	return 0;
+
+err_stop:
+	ath10k_vdev_stop(arvif);
+	arvif->is_started = false;
+	ath10k_mac_vif_setup_ps(arvif);
+
+	return ret;
+}
+
 static int ath10k_sta_state(struct ieee80211_hw *hw,
 			    struct ieee80211_vif *vif,
 			    struct ieee80211_sta *sta,
@@ -7508,6 +7608,7 @@ static int ath10k_sta_state(struct ieee80211_hw *hw,
 	struct ath10k_vif *arvif = (void *)vif->drv_priv;
 	struct ath10k_sta *arsta = (struct ath10k_sta *)sta->drv_priv;
 	struct ath10k_peer *peer;
+	bool delayed_stop;
 	int ret = 0;
 	int i;
 
@@ -7604,6 +7705,23 @@ static int ath10k_sta_state(struct ieee80211_hw *hw,
 
 		spin_unlock_bh(&ar->data_lock);
 
+		if (ar->hw_params.vdev_start_delay && !sta->tdls &&
+		    arvif->vdev_type == WMI_VDEV_TYPE_STA &&
+		    !arvif->is_started) {
+			struct cfg80211_chan_def def;
+
+			if (ath10k_mac_vif_chan(vif, &def) == 0) {
+				ret = ath10k_mac_vif_start(arvif, &def);
+				if (ret) {
+					ath10k_peer_delete(ar, arvif->vdev_id,
+							   sta->addr);
+					ath10k_mac_dec_num_stations(arvif, sta);
+					kfree(arsta->tx_stats);
+					goto exit;
+				}
+			}
+		}
+
 		if (!sta->tdls)
 			goto exit;
 
@@ -7653,10 +7771,37 @@ static int ath10k_sta_state(struct ieee80211_hw *hw,
 					    WMI_TDLS_PEER_STATE_TEARDOWN, ret);
 		}
 
+		/* Undo a delayed start in the vendor driver's order: stop the
+		 * vdev while it is up and the BSS peer still exists, delete
+		 * the peer, then down the vdev. The firmware crashes on a
+		 * vdev stop that follows a vdev down.
+		 */
+		delayed_stop = ar->hw_params.vdev_start_delay && !sta->tdls &&
+			       arvif->vdev_type == WMI_VDEV_TYPE_STA &&
+			       arvif->is_started;
+		if (delayed_stop) {
+			ret = ath10k_vdev_stop(arvif);
+			if (ret)
+				ath10k_warn(ar, "failed to stop vdev %i: %d\n",
+					    arvif->vdev_id, ret);
+
+			arvif->is_started = false;
+		}
+
 		ret = ath10k_peer_delete(ar, arvif->vdev_id, sta->addr);
 		if (ret)
 			ath10k_warn(ar, "failed to delete peer %pM for vdev %d: %i\n",
 				    sta->addr, arvif->vdev_id, ret);
+
+		if (delayed_stop) {
+			ret = ath10k_wmi_vdev_down(ar, arvif->vdev_id);
+			if (ret)
+				ath10k_warn(ar, "failed to down vdev %i: %d\n",
+					    arvif->vdev_id, ret);
+
+			arvif->is_up = false;
+			ath10k_mac_vif_setup_ps(arvif);
+		}
 
 		ath10k_mac_dec_num_stations(arvif, sta);
 
@@ -9004,66 +9149,16 @@ ath10k_mac_op_assign_vif_chanctx(struct ieee80211_hw *hw,
 		   "mac chanctx assign ptr %p vdev_id %i\n",
 		   ctx, arvif->vdev_id);
 
-	if (WARN_ON(arvif->is_started)) {
+	if (ath10k_mac_vif_start_delayed(arvif)) {
+		ath10k_dbg(ar, ATH10K_DBG_MAC,
+			   "mac vdev %i start delayed until the bss peer exists\n",
+			   arvif->vdev_id);
 		mutex_unlock(&ar->conf_mutex);
-		return -EBUSY;
+		return 0;
 	}
 
-	ret = ath10k_vdev_start(arvif, &ctx->def);
-	if (ret) {
-		ath10k_warn(ar, "failed to start vdev %i addr %pM on freq %d: %d\n",
-			    arvif->vdev_id, vif->addr,
-			    ctx->def.chan->center_freq, ret);
-		goto err;
-	}
+	ret = ath10k_mac_vif_start(arvif, &ctx->def);
 
-	arvif->is_started = true;
-
-	ret = ath10k_mac_vif_setup_ps(arvif);
-	if (ret) {
-		ath10k_warn(ar, "failed to update vdev %i ps: %d\n",
-			    arvif->vdev_id, ret);
-		goto err_stop;
-	}
-
-	if (vif->type == NL80211_IFTYPE_MONITOR) {
-		ret = ath10k_wmi_vdev_up(ar, arvif->vdev_id, 0, vif->addr);
-		if (ret) {
-			ath10k_warn(ar, "failed to up monitor vdev %i: %d\n",
-				    arvif->vdev_id, ret);
-			goto err_stop;
-		}
-
-		arvif->is_up = true;
-	}
-
-	if (ath10k_mac_can_set_cts_prot(arvif)) {
-		ret = ath10k_mac_set_cts_prot(arvif);
-		if (ret)
-			ath10k_warn(ar, "failed to set cts protection for vdev %d: %d\n",
-				    arvif->vdev_id, ret);
-	}
-
-	if (ath10k_peer_stats_enabled(ar) &&
-	    ar->hw_params.tx_stats_over_pktlog) {
-		ar->pktlog_filter |= ATH10K_PKTLOG_PEER_STATS;
-		ret = ath10k_wmi_pdev_pktlog_enable(ar,
-						    ar->pktlog_filter);
-		if (ret) {
-			ath10k_warn(ar, "failed to enable pktlog %d\n", ret);
-			goto err_stop;
-		}
-	}
-
-	mutex_unlock(&ar->conf_mutex);
-	return 0;
-
-err_stop:
-	ath10k_vdev_stop(arvif);
-	arvif->is_started = false;
-	ath10k_mac_vif_setup_ps(arvif);
-
-err:
 	mutex_unlock(&ar->conf_mutex);
 	return ret;
 }
@@ -9083,6 +9178,13 @@ ath10k_mac_op_unassign_vif_chanctx(struct ieee80211_hw *hw,
 	ath10k_dbg(ar, ATH10K_DBG_MAC,
 		   "mac chanctx unassign ptr %p vdev_id %i\n",
 		   ctx, arvif->vdev_id);
+
+	/* A delayed start never happened or was undone with the BSS peer. */
+	if (ar->hw_params.vdev_start_delay && !arvif->is_started &&
+	    arvif->vdev_type == WMI_VDEV_TYPE_STA) {
+		mutex_unlock(&ar->conf_mutex);
+		return;
+	}
 
 	WARN_ON(!arvif->is_started);
 

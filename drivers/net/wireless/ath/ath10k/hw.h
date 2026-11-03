@@ -638,6 +638,11 @@ struct ath10k_hw_params {
 
 	/* The hardware support multicast frame registrations */
 	bool mcast_frame_registration;
+
+	/* Firmware rejects starting a station vdev that has no peer yet, so
+	 * the vdev is started once the BSS peer has been created.
+	 */
+	bool vdev_start_delay;
 };
 
 struct htt_resp;
