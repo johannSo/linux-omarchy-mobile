@@ -149,6 +149,11 @@
 		};
 	};
 
+	/* Sets the RF test cable state in SMEM for the modem (rf_v3 = no cable). */
+	project-info {
+		compatible = "oneplus,sm8150-project-info";
+	};
+
 	/*
 	 * Downstream's /dev/qseecom for the vendor fingerprint HAL, with its
 	 * shared buffers in the qseecom carve-out. Its module refuses every
