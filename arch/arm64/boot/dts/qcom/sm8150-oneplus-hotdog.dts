@@ -63,13 +63,11 @@
 
 		pinctrl-0 = <&fp_irq_default &fp_reset_default &qup_spi3_default>;
 		pinctrl-names = "default";
-
-		status = "disabled";
 	};
 
 	/*
-	 * The sensor's supply switch (stock fp_vdd_init / fp_vdd_dis_init),
-	 * disabled with the sensor so that nothing changes at boot before then.
+	 * The sensor's supply switch (stock fp_vdd_init / fp_vdd_dis_init). It
+	 * stays off until goodix-fp's device is opened.
 	 */
 	vreg_fp_vdd: regulator-fp-vdd {
 		compatible = "regulator-fixed";
@@ -79,8 +77,6 @@
 
 		pinctrl-0 = <&fp_vdd_default>;
 		pinctrl-names = "default";
-
-		status = "disabled";
 	};
 
 	chosen {
