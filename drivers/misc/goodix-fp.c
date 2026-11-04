@@ -21,6 +21,14 @@
  * first open and disabled on the last close, with the sensor held in reset
  * whenever it is unpowered.
  *
+ * The secure world drives the SPI controller but cannot turn on the
+ * application processor's clocks for it. When the node lists clocks (the
+ * serial engine's and its wrapper's on the OnePlus 7T Pro), they are kept on
+ * for as long as the sensor is powered; without them every capture is an
+ * empty image. The stock kernel switched them from GF_IOC_ENABLE_SPI_CLK; the
+ * HAL holds the device open while it runs, so following the power state
+ * keeps them on for every capture without trusting the HAL to ask.
+ *
  * The netlink socket lives in the initial network namespace only, so the HAL
  * must not run in a separate network namespace.
  *
@@ -36,6 +44,7 @@
  */
 
 #include <linux/cdev.h>
+#include <linux/clk.h>
 #include <linux/compat.h>
 #include <linux/delay.h>
 #include <linux/fs.h>
@@ -114,6 +123,8 @@ struct gfp {
 	struct input_dev *input;
 	struct gpio_desc *reset;
 	struct regulator *vdd;
+	struct clk_bulk_data *clks;
+	int num_clks;
 	struct sock *nl_sk;
 	u32 nl_portid;		/* 0: nobody listening */
 	struct mutex lock;	/* users, irq_enabled, powered */
@@ -228,6 +239,13 @@ static int gfp_power_on(struct gfp *gfp)
 		}
 		usleep_range(GFP_POWER_SETTLE_US, GFP_POWER_SETTLE_US + 1000);
 	}
+	ret = clk_bulk_prepare_enable(gfp->num_clks, gfp->clks);
+	if (ret) {
+		dev_err(gfp->dev, "failed to enable the bus clocks: %d\n", ret);
+		if (gfp->vdd && !ignore_supply)
+			regulator_disable(gfp->vdd);
+		return ret;
+	}
 	gfp->powered = true;
 
 	return 0;
@@ -239,6 +257,7 @@ static void gfp_power_off(struct gfp *gfp)
 		return;
 
 	gpiod_set_value_cansleep(gfp->reset, 1);
+	clk_bulk_disable_unprepare(gfp->num_clks, gfp->clks);
 	if (gfp->vdd && !ignore_supply) {
 		dev_info(gfp->dev, "disabling sensor supply\n");
 		regulator_disable(gfp->vdd);
@@ -332,7 +351,7 @@ static long gfp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			 info.vendor_id, info.mode, info.operation);
 		break;
 	case GF_IOC_EXIT:
-	case GF_IOC_ENABLE_SPI_CLK:	/* the secure world owns the SPI clock */
+	case GF_IOC_ENABLE_SPI_CLK:	/* the bus clocks follow the power */
 	case GF_IOC_DISABLE_SPI_CLK:
 	case GF_IOC_ENABLE_POWER:	/* power follows open/close */
 	case GF_IOC_DISABLE_POWER:
@@ -497,6 +516,11 @@ static int gfp_probe(struct platform_device *pdev)
 		dev_warn(dev, "no vdd supply: the sensor rail must be switched on elsewhere\n");
 	}
 
+	gfp->num_clks = devm_clk_bulk_get_all(dev, &gfp->clks);
+	if (gfp->num_clks < 0)
+		return dev_err_probe(dev, gfp->num_clks,
+				     "failed to get the bus clocks\n");
+
 	gfp->irq = platform_get_irq(pdev, 0);
 	if (gfp->irq < 0)
 		return gfp->irq;
@@ -543,9 +567,9 @@ static int gfp_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	dev_info(dev, "irq %d, supply %s, netlink %d\n", gfp->irq,
+	dev_info(dev, "irq %d, supply %s, %d bus clocks, netlink %d\n", gfp->irq,
 		 gfp->vdd ? (ignore_supply ? "ignored" : "switched") : "none",
-		 GFP_NETLINK_PROTO);
+		 gfp->num_clks, GFP_NETLINK_PROTO);
 
 	return 0;
 }
