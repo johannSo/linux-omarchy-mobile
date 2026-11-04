@@ -25,6 +25,7 @@
 #include <dt-bindings/arm/qcom,ids.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
 #include "sm8150-oneplus-common.dtsi"
 
 /* Redone below, with guard pages, where this phone's modem expects it. */
@@ -39,6 +40,47 @@
 
 	aliases {
 		display0 = &framebuffer0;
+	};
+
+	/*
+	 * Goodix optical sensor under the panel (stock goodix_fp node). Its SPI
+	 * bus (QUP0 SE3, gpio144-147) belongs to the Goodix trusted application
+	 * in QSEE; Linux drives its supply switch (gpio101), reset (gpio131) and
+	 * interrupt (gpio118), and keeps the bus's pins and clocks on for QSEE,
+	 * as stock's enabled qupv3_se3_spi node with no child did. spi3 itself
+	 * stays disabled: Linux never drives that serial engine.
+	 */
+	fingerprint {
+		compatible = "oneplus,hotdog-udfps";
+		interrupts-extended = <&tlmm 118 IRQ_TYPE_EDGE_RISING>;
+		reset-gpios = <&tlmm 131 GPIO_ACTIVE_LOW>;
+		vdd-supply = <&vreg_fp_vdd>;
+
+		clocks = <&gcc GCC_QUPV3_WRAP0_S3_CLK>,
+			 <&gcc GCC_QUPV3_WRAP_0_M_AHB_CLK>,
+			 <&gcc GCC_QUPV3_WRAP_0_S_AHB_CLK>;
+		clock-names = "se", "m-ahb", "s-ahb";
+
+		pinctrl-0 = <&fp_irq_default &fp_reset_default &qup_spi3_default>;
+		pinctrl-names = "default";
+
+		status = "disabled";
+	};
+
+	/*
+	 * The sensor's supply switch (stock fp_vdd_init / fp_vdd_dis_init),
+	 * disabled with the sensor so that nothing changes at boot before then.
+	 */
+	vreg_fp_vdd: regulator-fp-vdd {
+		compatible = "regulator-fixed";
+		regulator-name = "fp_vdd";
+		gpio = <&tlmm 101 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+
+		pinctrl-0 = <&fp_vdd_default>;
+		pinctrl-names = "default";
+
+		status = "disabled";
 	};
 
 	chosen {
@@ -313,6 +355,30 @@
 		function = "gpio";
 		drive-strength = <8>;
 		bias-disable;
+	};
+
+	/* Fingerprint pins as stock's fp_irq_init, fp_reset_init, fp_vdd_*. */
+	fp_irq_default: fp-irq-default-state {
+		pins = "gpio118";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		output-disable;
+	};
+
+	fp_reset_default: fp-reset-default-state {
+		pins = "gpio131";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-pull-up;
+	};
+
+	/* Stock pulls down while off; the regulator drives it while on. */
+	fp_vdd_default: fp-vdd-default-state {
+		pins = "gpio101";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-pull-down;
 	};
 
 	mdss_te_default: mdss-te-default-state {
