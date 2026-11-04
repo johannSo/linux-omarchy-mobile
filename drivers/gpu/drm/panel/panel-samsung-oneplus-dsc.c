@@ -14,6 +14,8 @@
 #include <linux/regulator/consumer.h>
 #include <linux/gpio/consumer.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/workqueue.h>
 
 #include <video/mipi_display.h>
 
@@ -30,7 +32,31 @@ struct samsung_oneplus_dsc {
 	struct drm_dsc_config dsc;
 	struct gpio_desc *reset_gpio;
 	struct regulator *vddio;
+
+	/* High brightness mode for the under-display fingerprint sensor */
+	struct mutex hbm_lock;		/* prepared, hbm, panel commands */
+	struct delayed_work hbm_off_work;
+	bool prepared;
+	bool hbm;
 };
+
+/*
+ * The optical fingerprint sensor under this panel sees the finger by the
+ * panel's own light, so the area above it must be lit at full brightness
+ * while a capture runs. Stock drives that through the "hbm-on-command-5"
+ * (the brightest HBM level) and "hbm-off-command" sequences of its panel
+ * DT, which these replay byte for byte (from our capture of the stock dtbo,
+ * device/hotdog/FINGERPRINT-PLAN.md). HBM lights the whole panel; what is
+ * drawn above the sensor is the desktop's job.
+ *
+ * Full brightness heats the OLED and ages it, so HBM never stays on by
+ * itself: it turns off hbm_timeout_ms after the last write of 1, and the
+ * fingerprint bridge rewrites 1 while a finger is down.
+ */
+static unsigned int hbm_timeout_ms = 3000;
+module_param(hbm_timeout_ms, uint, 0644);
+MODULE_PARM_DESC(hbm_timeout_ms,
+		 "Turn the fingerprint HBM off this long after it was last requested (100-5000 ms)");
 
 static inline
 struct samsung_oneplus_dsc *to_samsung_oneplus_dsc(struct drm_panel *panel)
@@ -165,6 +191,11 @@ static int samsung_oneplus_dsc_prepare(struct drm_panel *panel)
 		}
 	}
 
+	mutex_lock(&ctx->hbm_lock);
+	ctx->prepared = true;
+	ctx->hbm = false;
+	mutex_unlock(&ctx->hbm_lock);
+
 	return 0;
 }
 
@@ -173,6 +204,13 @@ static int samsung_oneplus_dsc_unprepare(struct drm_panel *panel)
 	struct samsung_oneplus_dsc *ctx = to_samsung_oneplus_dsc(panel);
 	struct device *dev = &ctx->dsi->dev;
 	int ret;
+
+	/* The panel loses HBM with its power; no command after this. */
+	cancel_delayed_work_sync(&ctx->hbm_off_work);
+	mutex_lock(&ctx->hbm_lock);
+	ctx->prepared = false;
+	ctx->hbm = false;
+	mutex_unlock(&ctx->hbm_lock);
 
 	ret = samsung_oneplus_dsc_off(ctx);
 	if (ret < 0)
@@ -214,18 +252,26 @@ static const struct drm_panel_funcs samsung_oneplus_dsc_panel_funcs = {
 static int samsung_oneplus_dsc_bl_update_status(struct backlight_device *bl)
 {
 	struct mipi_dsi_device *dsi = bl_get_data(bl);
+	struct samsung_oneplus_dsc *ctx = mipi_dsi_get_drvdata(dsi);
 	u16 brightness = backlight_get_brightness(bl);
-	int ret;
+	int ret = 0;
+
+	/* During HBM the level is the sequence's; HBM off restores this one. */
+	mutex_lock(&ctx->hbm_lock);
+	if (ctx->hbm)
+		goto out;
 
 	dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
 
 	ret = mipi_dsi_dcs_set_display_brightness_large(dsi, brightness);
 	if (ret < 0)
-		return ret;
+		goto out;
 
 	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
-
-	return 0;
+	ret = 0;
+out:
+	mutex_unlock(&ctx->hbm_lock);
+	return ret;
 }
 
 // TODO: Check if /sys/class/backlight/.../actual_brightness actually returns
@@ -251,6 +297,182 @@ static const struct backlight_ops samsung_oneplus_dsc_bl_ops = {
 	.update_status = samsung_oneplus_dsc_bl_update_status,
 	.get_brightness = samsung_oneplus_dsc_bl_get_brightness,
 };
+
+/* Stock hbm-on-command-5, the brightest HBM level (0x51 = 0x0fff). */
+static void samsung_oneplus_dsc_hbm_on_seq(struct mipi_dsi_multi_context *dsi_ctx)
+{
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0xf0, 0x5a, 0x5a);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb0, 0x02);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb5, 0x93);
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0xf0, 0xa5, 0xa5);
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0xf0, 0x5a, 0x5a);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xc7, 0x27);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb0, 0x34);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb1, 0x4b);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb0, 0x06);
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0xb1,
+					 0x10, 0x00, 0x00, 0x0f, 0x03, 0x06,
+					 0x02, 0x0c, 0x18, 0x24, 0x3c, 0x77,
+					 0x00, 0xff, 0x00, 0x00, 0x00, 0x00,
+					 0x00, 0x10, 0x02, 0x0c, 0x18, 0x24,
+					 0x3c, 0x59, 0x77, 0x9b, 0xbe, 0xe2,
+					 0x06);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb0, 0x06);
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0xb5,
+					 0x14, 0x14, 0x14, 0x14, 0x14, 0x14,
+					 0x14, 0x14, 0x14, 0x14, 0x14, 0x14,
+					 0x14, 0x14, 0x14, 0x14, 0x14, 0x14,
+					 0x14, 0x14, 0x14, 0x14, 0x14);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb0, 0x17);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0x95, 0x30);
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0xf0, 0xa5, 0xa5);
+	mipi_dsi_msleep(dsi_ctx, 16);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, MIPI_DCS_WRITE_CONTROL_DISPLAY,
+				     0x30);
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, MIPI_DCS_SET_DISPLAY_BRIGHTNESS,
+					 0x0f, 0xff);
+	mipi_dsi_msleep(dsi_ctx, 12);
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0xf0, 0x5a, 0x5a);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0x92, 0x00);
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0xf0, 0xa5, 0xa5);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, MIPI_DCS_WRITE_CONTROL_DISPLAY,
+				     0x30);
+}
+
+/* Stock hbm-off-command; it ends at brightness 0x3ff, so restore after it. */
+static void samsung_oneplus_dsc_hbm_off_seq(struct mipi_dsi_multi_context *dsi_ctx)
+{
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0xf0, 0x5a, 0x5a);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb0, 0x02);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb5, 0x13);
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0xf0, 0xa5, 0xa5);
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0xf0, 0x5a, 0x5a);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0x92, 0x02);
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0xf0, 0xa5, 0xa5);
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, MIPI_DCS_SET_DISPLAY_BRIGHTNESS,
+					 0x03, 0xff);
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0xf0, 0x5a, 0x5a);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xc7, 0x23);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb0, 0x34);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb1, 0x6d);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb0, 0x06);
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0xb1,
+					 0x40, 0x00, 0x00, 0x1f, 0x0f, 0x18,
+					 0x08, 0x30, 0x60, 0x90, 0xf0, 0xdc,
+					 0xfc, 0xfc, 0x00, 0x00, 0x01, 0x12,
+					 0x23, 0x40, 0x08, 0x30, 0x60, 0x90,
+					 0xf0, 0x66, 0xdc, 0x6c, 0xfa, 0x8a,
+					 0x18);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb0, 0x06);
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0xb5,
+					 0x50, 0x50, 0x50, 0x50, 0x50, 0x50,
+					 0x50, 0x50, 0x50, 0x50, 0x50, 0x50,
+					 0x50, 0x50, 0x50, 0x50, 0x50, 0x50,
+					 0x50, 0x50, 0x50, 0x50, 0x50);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0xb0, 0x17);
+	mipi_dsi_dcs_write_seq_multi(dsi_ctx, 0x95, 0x00);
+	mipi_dsi_generic_write_seq_multi(dsi_ctx, 0xf0, 0xa5, 0xa5);
+}
+
+/* Called with hbm_lock held and the panel prepared. */
+static int samsung_oneplus_dsc_set_hbm(struct samsung_oneplus_dsc *ctx, bool on)
+{
+	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi };
+	struct backlight_device *bl = ctx->panel.backlight;
+
+	lockdep_assert_held(&ctx->hbm_lock);
+
+	if (ctx->hbm == on)
+		return 0;
+
+	ctx->dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
+	if (on) {
+		samsung_oneplus_dsc_hbm_on_seq(&dsi_ctx);
+	} else {
+		samsung_oneplus_dsc_hbm_off_seq(&dsi_ctx);
+		if (bl) {
+			u16 level = backlight_get_brightness(bl);
+			u8 cmd[] = { MIPI_DCS_SET_DISPLAY_BRIGHTNESS,
+				     level >> 8, level & 0xff };
+
+			mipi_dsi_dcs_write_buffer_multi(&dsi_ctx, cmd, sizeof(cmd));
+		}
+	}
+	ctx->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
+
+	/*
+	 * A failed "on" may have left part of the sequence applied; count HBM
+	 * as on so that the timeout still sends the off sequence.
+	 */
+	ctx->hbm = on || dsi_ctx.accum_err;
+
+	return dsi_ctx.accum_err;
+}
+
+static void samsung_oneplus_dsc_hbm_off_work(struct work_struct *work)
+{
+	struct samsung_oneplus_dsc *ctx =
+		container_of(to_delayed_work(work), struct samsung_oneplus_dsc,
+			     hbm_off_work);
+	int ret = 0;
+
+	mutex_lock(&ctx->hbm_lock);
+	if (ctx->prepared)
+		ret = samsung_oneplus_dsc_set_hbm(ctx, false);
+	mutex_unlock(&ctx->hbm_lock);
+
+	if (ret)
+		dev_err(&ctx->dsi->dev, "HBM off failed: %d\n", ret);
+}
+
+static ssize_t hbm_show(struct device *dev, struct device_attribute *attr,
+			char *buf)
+{
+	struct samsung_oneplus_dsc *ctx = dev_get_drvdata(dev);
+	bool on;
+
+	mutex_lock(&ctx->hbm_lock);
+	on = ctx->hbm;
+	mutex_unlock(&ctx->hbm_lock);
+
+	return sysfs_emit(buf, "%d\n", on);
+}
+
+static ssize_t hbm_store(struct device *dev, struct device_attribute *attr,
+			 const char *buf, size_t count)
+{
+	struct samsung_oneplus_dsc *ctx = dev_get_drvdata(dev);
+	unsigned int timeout = clamp(READ_ONCE(hbm_timeout_ms), 100U, 5000U);
+	bool on;
+	int ret;
+
+	ret = kstrtobool(buf, &on);
+	if (ret)
+		return ret;
+
+	mutex_lock(&ctx->hbm_lock);
+	if (!ctx->prepared) {
+		ret = -EBUSY;	/* the panel is off: nothing to light */
+		goto out;
+	}
+	ret = samsung_oneplus_dsc_set_hbm(ctx, on);
+	if (on)
+		mod_delayed_work(system_wq, &ctx->hbm_off_work,
+				 msecs_to_jiffies(timeout));
+	else
+		cancel_delayed_work(&ctx->hbm_off_work);
+out:
+	mutex_unlock(&ctx->hbm_lock);
+
+	return ret ?: count;
+}
+static DEVICE_ATTR_RW(hbm);
+
+static struct attribute *samsung_oneplus_dsc_attrs[] = {
+	&dev_attr_hbm.attr,
+	NULL
+};
+ATTRIBUTE_GROUPS(samsung_oneplus_dsc);
 
 static struct backlight_device *
 samsung_oneplus_dsc_create_backlight(struct mipi_dsi_device *dsi)
@@ -290,6 +512,11 @@ static int samsung_oneplus_dsc_probe(struct mipi_dsi_device *dsi)
 
 	ctx->dsi = dsi;
 	mipi_dsi_set_drvdata(dsi, ctx);
+
+	ret = devm_mutex_init(dev, &ctx->hbm_lock);
+	if (ret)
+		return ret;
+	INIT_DELAYED_WORK(&ctx->hbm_off_work, samsung_oneplus_dsc_hbm_off_work);
 
 	dsi->lanes = 4;
 	dsi->format = MIPI_DSI_FMT_RGB888;
@@ -343,6 +570,7 @@ static void samsung_oneplus_dsc_remove(struct mipi_dsi_device *dsi)
 	struct samsung_oneplus_dsc *ctx = mipi_dsi_get_drvdata(dsi);
 
 	drm_panel_remove(&ctx->panel);
+	cancel_delayed_work_sync(&ctx->hbm_off_work);
 }
 
 static const struct of_device_id samsung_oneplus_dsc_of_match[] = {
@@ -357,6 +585,7 @@ static struct mipi_dsi_driver samsung_oneplus_dsc_driver = {
 	.driver = {
 		.name = "panel-samsung-oneplus-dsc",
 		.of_match_table = samsung_oneplus_dsc_of_match,
+		.dev_groups = samsung_oneplus_dsc_groups,
 	},
 };
 module_mipi_dsi_driver(samsung_oneplus_dsc_driver);
