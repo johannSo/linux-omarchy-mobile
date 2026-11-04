@@ -66,6 +66,17 @@
 	};
 
 	/*
+	 * Downstream's /dev/qseecom for the vendor fingerprint HAL, with its
+	 * shared buffers in the qseecom carve-out. Its module refuses every
+	 * trusted application and listener that its allow-lists (module
+	 * parameters, set by the device package) do not name.
+	 */
+	qseecom-compat {
+		compatible = "omamobile,qseecom-compat";
+		memory-region = <&qseecom_mem>;
+	};
+
+	/*
 	 * The sensor's supply switch (stock fp_vdd_init / fp_vdd_dis_init). It
 	 * stays off until goodix-fp's device is opened.
 	 */
