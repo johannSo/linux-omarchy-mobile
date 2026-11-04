@@ -11,13 +11,16 @@ maintainers:
 
 description:
   Goodix optical fingerprint sensor under an OLED panel, as in the Google
-  Pixel 7 Pro. Its SPI bus is owned by a trusted application in the secure
-  world, so the node is not on an SPI controller; it describes only the
-  lines the application processor drives.
+  Pixel 7 Pro and the OnePlus 7T Pro. Its SPI bus is owned by a trusted
+  application in the secure world (Trusty on the Pixel, QSEE on the OnePlus),
+  so the node is not on an SPI controller; it describes only the lines the
+  application processor drives.
 
 properties:
   compatible:
-    const: goodix,g7-udfps
+    enum:
+      - goodix,g7-udfps
+      - oneplus,hotdog-udfps
 
   interrupts:
     maxItems: 1
