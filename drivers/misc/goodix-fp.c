@@ -23,6 +23,16 @@
  *
  * The netlink socket lives in the initial network namespace only, so the HAL
  * must not run in a separate network namespace.
+ *
+ * On the OnePlus 7T Pro the sensor sits under the same kind of OLED panel, but
+ * the vendor HAL talks to a trusted application in QSEE instead of Trusty and
+ * also waits for display and touch events around a capture (finger down, the
+ * panel lit at high brightness, finger up). On Android the vendor kernel sent
+ * those from its display and touch drivers; here userspace knows them (the
+ * fingerprint bridge reads the touchscreen and switches the panel's HBM), so
+ * a root-only "notify" attribute turns a word into the netlink event. The
+ * event numbers are module parameters: they are not confirmed yet and come
+ * from the owner's own HAL (device/hotdog/FINGERPRINT-PLAN.md).
  */
 
 #include <linux/cdev.h>
@@ -38,6 +48,7 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/netlink.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_wakeup.h>
 #include <linux/regulator/consumer.h>
@@ -111,6 +122,23 @@ struct gfp {
 	bool powered;
 	int irq;
 };
+
+/* Events only the OnePlus HAL waits for; 0 disables one (not confirmed). */
+static unsigned int ev_fb_black = 2;
+module_param(ev_fb_black, uint, 0444);
+MODULE_PARM_DESC(ev_fb_black, "netlink event for notify=fb_black (0: off)");
+static unsigned int ev_fb_unblack = 3;
+module_param(ev_fb_unblack, uint, 0444);
+MODULE_PARM_DESC(ev_fb_unblack, "netlink event for notify=fb_unblack (0: off)");
+static unsigned int ev_touchdown = 4;
+module_param(ev_touchdown, uint, 0444);
+MODULE_PARM_DESC(ev_touchdown, "netlink event for notify=touchdown (0: off)");
+static unsigned int ev_touchup = 5;
+module_param(ev_touchup, uint, 0444);
+MODULE_PARM_DESC(ev_touchup, "netlink event for notify=touchup (0: off)");
+static unsigned int ev_ui_ready = 6;
+module_param(ev_ui_ready, uint, 0444);
+MODULE_PARM_DESC(ev_ui_ready, "netlink event for notify=ui_ready (0: off)");
 
 static bool ignore_supply;
 module_param(ignore_supply, bool, 0444);
@@ -367,6 +395,60 @@ static const struct file_operations gfp_fops = {
 
 static const unsigned int gfp_keys[] = { KEY_HOME, KEY_POWER, KEY_CAMERA };
 
+static const struct {
+	const char *word;
+	const unsigned int *event;
+} gfp_notify_words[] = {
+	{ "fb_black", &ev_fb_black },
+	{ "fb_unblack", &ev_fb_unblack },
+	{ "touchdown", &ev_touchdown },
+	{ "touchup", &ev_touchup },
+	{ "ui_ready", &ev_ui_ready },
+};
+
+static ssize_t notify_store(struct device *dev, struct device_attribute *attr,
+			    const char *buf, size_t count)
+{
+	struct gfp *gfp = dev_get_drvdata(dev);
+	unsigned int i, event;
+
+	for (i = 0; i < ARRAY_SIZE(gfp_notify_words); i++) {
+		if (!sysfs_streq(buf, gfp_notify_words[i].word))
+			continue;
+		event = *gfp_notify_words[i].event;
+		if (!event || event > U8_MAX)
+			return -EOPNOTSUPP;
+		gfp_nl_send(gfp, event);
+		return count;
+	}
+
+	return -EINVAL;
+}
+static DEVICE_ATTR_WO(notify);
+
+static struct attribute *gfp_attrs[] = {
+	&dev_attr_notify.attr,
+	NULL
+};
+
+/* Only OnePlus's HAL waits for these events: other boards don't get it. */
+static umode_t gfp_attr_visible(struct kobject *kobj, struct attribute *attr,
+				int n)
+{
+	struct device *dev = kobj_to_dev(kobj);
+
+	if (!of_device_is_compatible(dev->of_node, "oneplus,hotdog-udfps"))
+		return 0;
+
+	return attr->mode;
+}
+
+static const struct attribute_group gfp_group = {
+	.attrs = gfp_attrs,
+	.is_visible = gfp_attr_visible,
+};
+__ATTRIBUTE_GROUPS(gfp);
+
 static void gfp_nl_release(void *data)
 {
 	struct gfp *gfp = data;
@@ -398,6 +480,7 @@ static int gfp_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	gfp->dev = dev;
 	mutex_init(&gfp->lock);
+	platform_set_drvdata(pdev, gfp);
 
 	/* Held in reset until the first open powers the sensor. */
 	gfp->reset = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
@@ -469,6 +552,7 @@ static int gfp_probe(struct platform_device *pdev)
 
 static const struct of_device_id gfp_of_match[] = {
 	{ .compatible = "goodix,g7-udfps" },
+	{ .compatible = "oneplus,hotdog-udfps" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, gfp_of_match);
@@ -478,6 +562,7 @@ static struct platform_driver gfp_driver = {
 	.driver = {
 		.name = "goodix-fp",
 		.of_match_table = gfp_of_match,
+		.dev_groups = gfp_groups,
 		/*
 		 * An open /dev/goodix_fp pins the module but not the device;
 		 * unbinding under an open file would free its state.
