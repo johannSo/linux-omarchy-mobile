@@ -32,10 +32,26 @@ properties:
   vdd-supply:
     description: Sensor analog supply.
 
+  clocks:
+    description:
+      Clocks of the SPI controller the secure world drives the sensor
+      through, which only the application processor can turn on. They are
+      kept on while the sensor is powered.
+    maxItems: 3
+
+  clock-names:
+    items:
+      - const: se
+      - const: m-ahb
+      - const: s-ahb
+
 required:
   - compatible
   - interrupts
   - reset-gpios
+
+dependentRequired:
+  clocks: [ clock-names ]
 
 additionalProperties: false
 
@@ -49,4 +65,18 @@ examples:
         interrupt-parent = <&gpa9>;
         interrupts = <2 IRQ_TYPE_EDGE_RISING>;
         reset-gpios = <&gpp1 1 GPIO_ACTIVE_LOW>;
+    };
+  - |
+    #include <dt-bindings/clock/qcom,gcc-sm8150.h>
+    #include <dt-bindings/gpio/gpio.h>
+    #include <dt-bindings/interrupt-controller/irq.h>
+
+    fingerprint {
+        compatible = "oneplus,hotdog-udfps";
+        interrupts-extended = <&tlmm 118 IRQ_TYPE_EDGE_RISING>;
+        reset-gpios = <&tlmm 131 GPIO_ACTIVE_LOW>;
+        clocks = <&gcc GCC_QUPV3_WRAP0_S3_CLK>,
+                 <&gcc GCC_QUPV3_WRAP_0_M_AHB_CLK>,
+                 <&gcc GCC_QUPV3_WRAP_0_S_AHB_CLK>;
+        clock-names = "se", "m-ahb", "s-ahb";
     };
