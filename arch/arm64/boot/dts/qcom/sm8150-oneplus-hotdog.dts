@@ -1044,3 +1044,81 @@
 		};
 	};
 };
+
+/*
+ * The front camera's pop-up (CAMERA-PLAN.md, P-steps): a DRV8834 stepper
+ * driver in 1/32-step mode and two MagnaChip M1120 hall sensors, from the
+ * vendor device tree and OnePlus's GPL motor driver. STEP is PM8150L
+ * GPIO10 in its PWM function (the LPG channel at 0xbd00); DIR (PM8150L
+ * GPIO11), M1 (PM8150L GPIO8), nSLEEP (PM8150 GPIO10) and the boost enable
+ * (PM8150B GPIO12) are plain outputs; M0 (PM8150B GPIO5) floats, which with
+ * M1 high selects 1/32 steps. The LPG carries all their pin states, so
+ * nothing changes on these pins until the LPG is enabled; omamobile-hotdog-
+ * popup drives the motor from userspace. The hall sensors (0x0c at the top,
+ * 0x0d at the bottom; vdd L7C, vio L8C) sit on QUP SE1 with no kernel
+ * driver: the same tool reads them through i2c-dev.
+ */
+&i2c1 {
+	clock-frequency = <400000>;
+};
+
+&pm8150l_lpg {
+	pinctrl-0 = <&popup_step>, <&popup_dir>, <&popup_m1>,
+		    <&popup_sleep_n>, <&popup_m0>, <&popup_boost>;
+	pinctrl-names = "default";
+};
+
+&pm8150_gpios {
+	popup_sleep_n: popup-sleep-n-state {
+		pins = "gpio10";
+		function = "normal";
+		power-source = <0>;
+		bias-disable;
+		output-low;
+	};
+};
+
+&pm8150b_gpios {
+	popup_m0: popup-m0-state {
+		pins = "gpio5";
+		function = "normal";
+		bias-high-impedance;
+	};
+
+	popup_boost: popup-boost-state {
+		pins = "gpio12";
+		function = "normal";
+		bias-disable;
+		output-low;
+	};
+};
+
+&pm8150l_gpios {
+	popup_step: popup-step-state {
+		pins = "gpio10";
+		function = "func1";
+		power-source = <0>;
+		bias-disable;
+		output-low;
+		drive-push-pull;
+		qcom,drive-strength = <3>;
+	};
+
+	popup_dir: popup-dir-state {
+		pins = "gpio11";
+		function = "normal";
+		power-source = <0>;
+		bias-disable;
+		output-low;
+		qcom,drive-strength = <3>;
+	};
+
+	popup_m1: popup-m1-state {
+		pins = "gpio8";
+		function = "normal";
+		power-source = <0>;
+		bias-disable;
+		output-low;
+		qcom,drive-strength = <3>;
+	};
+};
