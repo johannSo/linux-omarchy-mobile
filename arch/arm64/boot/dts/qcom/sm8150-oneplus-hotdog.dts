@@ -681,8 +681,20 @@
  * switches the vendor tree drives as GPIOs, fed from BoB; their output
  * voltage is not described anywhere we can read. Stock runs the S5K3M5 at
  * 19.2 MHz; the mainline driver's tables are written for 24 MHz (*), which
- * the camera clock controller gives exactly. The actuators, OIS and EEPROMs
- * are left out: the lenses rest at their stops until they have drivers.
+ * the camera clock controller gives exactly. The OIS controllers and EEPROMs
+ * are left out.
+ *
+ * Focus actuators (voice coils), from the same sources: each has its own
+ * load switch from BoB (vendor "cam_vaf", 3.3 V), on gpio25 (main), gpio35
+ * (tele) and PM8150L gpio4 (wide). Main and tele are one dual module, and
+ * which chips it has depends on its maker: SEMCO's has LC898217XCs at 0x72
+ * (main) and 0x74 (tele), O-film's AK7374s at 0x2d and 0x74. The nodes
+ * below describe the SEMCO module; for an O-film one, the main lens is an
+ * asahi-kasei,ak7374 at 0x2d and the tele lens an asahi-kasei,ak7374 at
+ * 0x74. The ultrawide has an AK7374 at 0x0c either way. All three take
+ * 10-bit positions. The lenses stay disabled, so the sensors' lens-focus
+ * links are ignored, until a bring-up overlay enables them with their
+ * switches.
  * Rotation is the vendor's sensor-position-roll; orientation its yaw.
  */
 / {
@@ -751,6 +763,39 @@
 		pinctrl-names = "default";
 		status = "disabled";
 	};
+
+	cam_main_vaf: regulator-cam-main-vaf {
+		compatible = "regulator-fixed";
+		regulator-name = "cam_main_vaf";
+		gpio = <&tlmm 25 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		vin-supply = <&vreg_bob>;
+		pinctrl-0 = <&cam_main_vaf_en>;
+		pinctrl-names = "default";
+		status = "disabled";
+	};
+
+	cam_tele_vaf: regulator-cam-tele-vaf {
+		compatible = "regulator-fixed";
+		regulator-name = "cam_tele_vaf";
+		gpio = <&tlmm 35 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		vin-supply = <&vreg_bob>;
+		pinctrl-0 = <&cam_tele_vaf_en>;
+		pinctrl-names = "default";
+		status = "disabled";
+	};
+
+	cam_wide_vaf: regulator-cam-wide-vaf {
+		compatible = "regulator-fixed";
+		regulator-name = "cam_wide_vaf";
+		gpio = <&pm8150l_gpios 4 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		vin-supply = <&vreg_bob>;
+		pinctrl-0 = <&cam_wide_vaf_en>;
+		pinctrl-names = "default";
+		status = "disabled";
+	};
 };
 
 &apps_rsc {
@@ -792,6 +837,14 @@
 
 	cam_wide_vana_en: cam-wide-vana-en-state {
 		pins = "gpio2";
+		function = "normal";
+		power-source = <0>;
+		bias-disable;
+		output-low;
+	};
+
+	cam_wide_vaf_en: cam-wide-vaf-en-state {
+		pins = "gpio4";
 		function = "normal";
 		power-source = <0>;
 		bias-disable;
@@ -852,6 +905,20 @@
 
 	cam_tele_vana_en: cam-tele-vana-en-state {
 		pins = "gpio148";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	cam_main_vaf_en: cam-main-vaf-en-state {
+		pins = "gpio25";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	cam_tele_vaf_en: cam-tele-vaf-en-state {
+		pins = "gpio35";
 		function = "gpio";
 		drive-strength = <2>;
 		bias-disable;
@@ -939,6 +1006,7 @@
 		vddio-supply = <&vreg_l1c_1p8>;
 		pinctrl-0 = <&cam_mclk0_default>, <&cam_tele_rst>;
 		pinctrl-names = "default";
+		lens-focus = <&cam_tele_lens>;
 		orientation = <1>;
 		rotation = <90>;
 		status = "disabled";
@@ -950,6 +1018,14 @@
 				remote-endpoint = <&camss_csiphy0_ep>;
 			};
 		};
+	};
+
+	cam_tele_lens: lens@74 {
+		compatible = "onnn,lc898217xc";
+		reg = <0x74>;
+		vdd-supply = <&cam_tele_vaf>;
+		vio-supply = <&vreg_l1c_1p8>;
+		status = "disabled";
 	};
 };
 
@@ -969,6 +1045,7 @@
 		vif-supply = <&vreg_l1c_1p8>;
 		pinctrl-0 = <&cam_mclk1_default>, <&cam_main_rst>;
 		pinctrl-names = "default";
+		lens-focus = <&cam_main_lens>;
 		orientation = <1>;
 		rotation = <90>;
 		status = "disabled";
@@ -981,6 +1058,14 @@
 				remote-endpoint = <&camss_csiphy1_ep>;
 			};
 		};
+	};
+
+	cam_main_lens: lens@72 {
+		compatible = "onnn,lc898217xc";
+		reg = <0x72>;
+		vdd-supply = <&cam_main_vaf>;
+		vio-supply = <&vreg_l1c_1p8>;
+		status = "disabled";
 	};
 };
 
@@ -1012,6 +1097,14 @@
 };
 
 &cci1_i2c1 {
+	cam_wide_lens: lens@c {
+		compatible = "asahi-kasei,ak7374";
+		reg = <0x0c>;
+		vdd-supply = <&cam_wide_vaf>;
+		vio-supply = <&vreg_l1c_1p8>;
+		status = "disabled";
+	};
+
 	cam_wide: camera@1a {
 		compatible = "sony,imx481";
 		reg = <0x1a>;
@@ -1025,6 +1118,7 @@
 		vif-supply = <&vreg_l1c_1p8>;
 		pinctrl-0 = <&cam_mclk3_default>, <&cam_wide_rst>;
 		pinctrl-names = "default";
+		lens-focus = <&cam_wide_lens>;
 		orientation = <1>;
 		/*
 		 * Stock describes this module as roll 270, yaw 0 and the other
