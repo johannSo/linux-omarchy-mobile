@@ -27,6 +27,7 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/leds/common.h>
+#include <dt-bindings/media/video-interfaces.h>
 #include "sm8150-oneplus-common.dtsi"
 
 /* Redone below, with guard pages, where this phone's modem expects it. */
@@ -655,6 +656,391 @@
 		pinconf-tx-rx {
 			pins = "gpio45", "gpio46";
 			bias-pull-up;
+		};
+	};
+};
+
+/*
+ * Cameras (CAMERA-PLAN.md). Everything below stays disabled; the plan's
+ * overlays enable it one step at a time. Wiring from the vendor device tree
+ * (dtbo entry 18, "MTP 19801", OnePlus's fragment on cam_cci0) and the
+ * camera module files of OxygenOS 10.0.14:
+ *
+ *   camera     sensor  CCI     addr  CSIPHY          MCLK          XCLR
+ *   rear main  IMX586  0 / m1  0x1a  1, C-PHY 3 trio 1, 19.2 MHz  gpio30
+ *   telephoto  S5K3M5  0 / m0  0x10  0, D-PHY 4 lane 0, 24 MHz *  gpio28
+ *   front      IMX471  1 / m0  0x10  2, D-PHY 4 lane 2, 19.2 MHz  gpio12
+ *   ultrawide  IMX481  1 / m1  0x1a  3, D-PHY 4 lane 3, 19.2 MHz  gpio23
+ *
+ *   main:  vana gpio11, vana2 gpio29, vdig L1F 1.104 V, vdig2 PM8150L gpio1
+ *   tele:  vana gpio148, vdig L2F 1.056 V
+ *   front: vana PM8150L gpio12, vdig L3F 1.056 V
+ *   wide:  vana PM8150L gpio2, vdig L4F 1.056 V
+ *
+ * All share vio (L1C, 1.8 V). The vana and vana2/vdig2 rails are load
+ * switches the vendor tree drives as GPIOs, fed from BoB; their output
+ * voltage is not described anywhere we can read. Stock runs the S5K3M5 at
+ * 19.2 MHz; the mainline driver's tables are written for 24 MHz (*), which
+ * the camera clock controller gives exactly. The actuators, OIS and EEPROMs
+ * are left out: the lenses rest at their stops until they have drivers.
+ * Rotation is the vendor's sensor-position-roll; orientation its yaw.
+ */
+/ {
+	cam_main_vana: regulator-cam-main-vana {
+		compatible = "regulator-fixed";
+		regulator-name = "cam_main_vana";
+		gpio = <&tlmm 11 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		vin-supply = <&vreg_bob>;
+		pinctrl-0 = <&cam_main_vana_en>;
+		pinctrl-names = "default";
+		status = "disabled";
+	};
+
+	cam_main_vana2: regulator-cam-main-vana2 {
+		compatible = "regulator-fixed";
+		regulator-name = "cam_main_vana2";
+		gpio = <&tlmm 29 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		vin-supply = <&vreg_bob>;
+		pinctrl-0 = <&cam_main_vana2_en>;
+		pinctrl-names = "default";
+		status = "disabled";
+	};
+
+	cam_main_vdig2: regulator-cam-main-vdig2 {
+		compatible = "regulator-fixed";
+		regulator-name = "cam_main_vdig2";
+		gpio = <&pm8150l_gpios 1 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		vin-supply = <&vreg_bob>;
+		pinctrl-0 = <&cam_main_vdig2_en>;
+		pinctrl-names = "default";
+		status = "disabled";
+	};
+
+	cam_tele_vana: regulator-cam-tele-vana {
+		compatible = "regulator-fixed";
+		regulator-name = "cam_tele_vana";
+		gpio = <&tlmm 148 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		vin-supply = <&vreg_bob>;
+		pinctrl-0 = <&cam_tele_vana_en>;
+		pinctrl-names = "default";
+		status = "disabled";
+	};
+
+	cam_front_vana: regulator-cam-front-vana {
+		compatible = "regulator-fixed";
+		regulator-name = "cam_front_vana";
+		gpio = <&pm8150l_gpios 12 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		vin-supply = <&vreg_bob>;
+		pinctrl-0 = <&cam_front_vana_en>;
+		pinctrl-names = "default";
+		status = "disabled";
+	};
+
+	cam_wide_vana: regulator-cam-wide-vana {
+		compatible = "regulator-fixed";
+		regulator-name = "cam_wide_vana";
+		gpio = <&pm8150l_gpios 2 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		vin-supply = <&vreg_bob>;
+		pinctrl-0 = <&cam_wide_vana_en>;
+		pinctrl-names = "default";
+		status = "disabled";
+	};
+};
+
+&apps_rsc {
+	regulators-2 {
+		vreg_l1f_1p104: ldo1 {
+			regulator-min-microvolt = <1104000>;
+			regulator-max-microvolt = <1104000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l3f_1p056: ldo3 {
+			regulator-min-microvolt = <1056000>;
+			regulator-max-microvolt = <1056000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l4f_1p056: ldo4 {
+			regulator-min-microvolt = <1056000>;
+			regulator-max-microvolt = <1056000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+};
+
+/* The telephoto's digital core: 1.056 V on this board, not the MTP's 1.2 V. */
+&vreg_l2f_1p2 {
+	regulator-min-microvolt = <1056000>;
+	regulator-max-microvolt = <1056000>;
+};
+
+&pm8150l_gpios {
+	cam_main_vdig2_en: cam-main-vdig2-en-state {
+		pins = "gpio1";
+		function = "normal";
+		power-source = <0>;
+		bias-disable;
+		output-low;
+	};
+
+	cam_wide_vana_en: cam-wide-vana-en-state {
+		pins = "gpio2";
+		function = "normal";
+		power-source = <0>;
+		bias-disable;
+		output-low;
+	};
+
+	cam_front_vana_en: cam-front-vana-en-state {
+		pins = "gpio12";
+		function = "normal";
+		power-source = <0>;
+		bias-disable;
+		output-low;
+	};
+};
+
+&tlmm {
+	cam_mclk0_default: cam-mclk0-default-state {
+		pins = "gpio13";
+		function = "cam_mclk";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	cam_mclk1_default: cam-mclk1-default-state {
+		pins = "gpio14";
+		function = "cam_mclk";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	cam_mclk2_default: cam-mclk2-default-state {
+		pins = "gpio15";
+		function = "cam_mclk";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	cam_mclk3_default: cam-mclk3-default-state {
+		pins = "gpio16";
+		function = "cam_mclk";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	cam_main_vana_en: cam-main-vana-en-state {
+		pins = "gpio11";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	cam_main_vana2_en: cam-main-vana2-en-state {
+		pins = "gpio29";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	cam_tele_vana_en: cam-tele-vana-en-state {
+		pins = "gpio148";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	cam_main_rst: cam-main-rst-state {
+		pins = "gpio30";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	cam_tele_rst: cam-tele-rst-state {
+		pins = "gpio28";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	cam_front_rst: cam-front-rst-state {
+		pins = "gpio12";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	cam_wide_rst: cam-wide-rst-state {
+		pins = "gpio23";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+};
+
+&camss {
+	vdda-phy-supply = <&vreg_l5a_0p875>;
+	vdda-pll-supply = <&vreg_l3c_1p2>;
+
+	ports {
+		port@0 {
+			camss_csiphy0_ep: endpoint {
+				clock-lanes = <7>;
+				data-lanes = <0 1 2 3>;
+				remote-endpoint = <&cam_tele_ep>;
+			};
+		};
+
+		port@1 {
+			camss_csiphy1_ep: endpoint {
+				bus-type = <MEDIA_BUS_TYPE_CSI2_CPHY>;
+				clock-lanes = <7>;
+				data-lanes = <0 1 2>;
+				remote-endpoint = <&cam_main_ep>;
+			};
+		};
+
+		port@2 {
+			camss_csiphy2_ep: endpoint {
+				clock-lanes = <7>;
+				data-lanes = <0 1 2 3>;
+				remote-endpoint = <&cam_front_ep>;
+			};
+		};
+
+		port@3 {
+			camss_csiphy3_ep: endpoint {
+				clock-lanes = <7>;
+				data-lanes = <0 1 2 3>;
+				remote-endpoint = <&cam_wide_ep>;
+			};
+		};
+	};
+};
+
+&cci0_i2c0 {
+	cam_tele: camera@10 {
+		compatible = "samsung,s5k3m5";
+		reg = <0x10>;
+		clocks = <&camcc CAM_CC_MCLK0_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK0_CLK>;
+		assigned-clock-rates = <24000000>;
+		reset-gpios = <&tlmm 28 GPIO_ACTIVE_LOW>;
+		vdda-supply = <&cam_tele_vana>;
+		vddd-supply = <&vreg_l2f_1p2>;
+		vddio-supply = <&vreg_l1c_1p8>;
+		pinctrl-0 = <&cam_mclk0_default>, <&cam_tele_rst>;
+		pinctrl-names = "default";
+		orientation = <1>;
+		rotation = <90>;
+		status = "disabled";
+
+		port {
+			cam_tele_ep: endpoint {
+				data-lanes = <1 2 3 4>;
+				link-frequencies = /bits/ 64 <602500000>;
+				remote-endpoint = <&camss_csiphy0_ep>;
+			};
+		};
+	};
+};
+
+&cci0_i2c1 {
+	cam_main: camera@1a {
+		compatible = "sony,imx586";
+		reg = <0x1a>;
+		firmware-name = "omamobile/camera/imx586-main.bin";
+		clocks = <&camcc CAM_CC_MCLK1_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK1_CLK>;
+		assigned-clock-rates = <19200000>;
+		reset-gpios = <&tlmm 30 GPIO_ACTIVE_LOW>;
+		vana-supply = <&cam_main_vana>;
+		vana2-supply = <&cam_main_vana2>;
+		vdig-supply = <&vreg_l1f_1p104>;
+		vdig2-supply = <&cam_main_vdig2>;
+		vif-supply = <&vreg_l1c_1p8>;
+		pinctrl-0 = <&cam_mclk1_default>, <&cam_main_rst>;
+		pinctrl-names = "default";
+		orientation = <1>;
+		rotation = <90>;
+		status = "disabled";
+
+		port {
+			cam_main_ep: endpoint {
+				bus-type = <MEDIA_BUS_TYPE_CSI2_CPHY>;
+				data-lanes = <1 2 3>;
+				link-frequencies = /bits/ 64 <421203125 340003125>;
+				remote-endpoint = <&camss_csiphy1_ep>;
+			};
+		};
+	};
+};
+
+&cci1_i2c0 {
+	cam_front: camera@10 {
+		compatible = "sony,imx471";
+		reg = <0x10>;
+		clocks = <&camcc CAM_CC_MCLK2_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK2_CLK>;
+		assigned-clock-rates = <19200000>;
+		reset-gpios = <&tlmm 12 GPIO_ACTIVE_LOW>;
+		vana-supply = <&cam_front_vana>;
+		vdig-supply = <&vreg_l3f_1p056>;
+		vif-supply = <&vreg_l1c_1p8>;
+		pinctrl-0 = <&cam_mclk2_default>, <&cam_front_rst>;
+		pinctrl-names = "default";
+		orientation = <0>;
+		rotation = <90>;
+		status = "disabled";
+
+		port {
+			cam_front_ep: endpoint {
+				data-lanes = <1 2 3 4>;
+				link-frequencies = /bits/ 64 <200000000>;
+				remote-endpoint = <&camss_csiphy2_ep>;
+			};
+		};
+	};
+};
+
+&cci1_i2c1 {
+	cam_wide: camera@1a {
+		compatible = "sony,imx481";
+		reg = <0x1a>;
+		firmware-name = "omamobile/camera/imx481-wide.bin";
+		clocks = <&camcc CAM_CC_MCLK3_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK3_CLK>;
+		assigned-clock-rates = <19200000>;
+		reset-gpios = <&tlmm 23 GPIO_ACTIVE_LOW>;
+		vana-supply = <&cam_wide_vana>;
+		vdig-supply = <&vreg_l4f_1p056>;
+		vif-supply = <&vreg_l1c_1p8>;
+		pinctrl-0 = <&cam_mclk3_default>, <&cam_wide_rst>;
+		pinctrl-names = "default";
+		orientation = <1>;
+		/*
+		 * Stock describes this module as roll 270, yaw 0 and the other
+		 * rear ones as roll 90, yaw 180: the same mounting, seen from
+		 * the other side. The captured picture matches the other rear
+		 * cameras.
+		 */
+		rotation = <90>;
+		status = "disabled";
+
+		port {
+			cam_wide_ep: endpoint {
+				data-lanes = <1 2 3 4>;
+				link-frequencies = /bits/ 64 <659200000>;
+				remote-endpoint = <&camss_csiphy3_ep>;
+			};
 		};
 	};
 };
