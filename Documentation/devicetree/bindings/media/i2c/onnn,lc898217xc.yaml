@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/i2c/onnn,lc898217xc.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: ON Semiconductor LC898217XC camera lens autofocus actuator driver
+
+maintainers:
+  - johannSo <jzeug@soppa.de>
+
+description:
+  The LC898217XC drives a camera module's voice coil focus actuator. It is
+  controlled over I2C with 8-bit register addresses and takes a 10-bit
+  target position. The OnePlus 7T Pro's main and telephoto modules from
+  one of their makers focus with one each.
+
+properties:
+  compatible:
+    const: onnn,lc898217xc
+
+  reg:
+    maxItems: 1
+
+  vdd-supply:
+    description: Actuator supply.
+
+  vio-supply:
+    description: Interface (I2C pull-up) supply.
+
+required:
+  - compatible
+  - reg
+  - vdd-supply
+  - vio-supply
+
+additionalProperties: false
+
+examples:
+  - |
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        lens@72 {
+            compatible = "onnn,lc898217xc";
+            reg = <0x72>;
+            vdd-supply = <&cam_main_vaf>;
+            vio-supply = <&vreg_l1c_1p8>;
+        };
+    };
+...
