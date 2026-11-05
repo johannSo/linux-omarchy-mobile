@@ -231,6 +231,15 @@ static int wcd934x_slim_probe(struct slim_device *sdev)
 		return dev_err_probe(dev, PTR_ERR(ddata->extclk),
 				     "Failed to get extclk");
 
+	/*
+	 * Boards that feed the micbias LDO from a switchable rail (the
+	 * OnePlus 7T Pro uses PM8150L BoB) must keep it on, or the bias
+	 * outputs stay at 0 V and every analog microphone is silent.
+	 */
+	ret = devm_regulator_get_enable_optional(dev, "vdd-micbias");
+	if (ret && ret != -ENODEV)
+		return dev_err_probe(dev, ret, "Failed to enable micbias supply\n");
+
 	ddata->supplies[0].supply = "vdd-buck";
 	ddata->supplies[1].supply = "vdd-buck-sido";
 	ddata->supplies[2].supply = "vdd-tx";
