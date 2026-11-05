@@ -987,6 +987,17 @@ config VIDEO_DW9807_VCM
 	  capability. This is designed for linear control of
 	  voice coil motors, controlled via I2C serial interface.
 
+config VIDEO_LC898217XC
+	tristate "LC898217XC lens voice coil support"
+	select V4L2_CCI_I2C
+	help
+	  This is a driver for the ON Semiconductor LC898217XC camera
+	  lens voice coil driver, as in some of the OnePlus 7T Pro's
+	  camera modules.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called lc898217xc.
+
 config VIDEO_SEM1215
 	tristate "SEMCO SEM1215SA lens focus support"
 	select V4L2_CCI_I2C
