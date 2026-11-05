@@ -659,6 +659,127 @@
 			sound-dai = <&speaker_top>, <&speaker_bottom>;
 		};
 	};
+
+	/*
+	 * Microphones: WCD9340 AIF1_CAP on SLIMbus 0 TX. Disabled until the
+	 * mic bring-up overlay (omarchy-mobile device/hotdog/overlays/mic.dtso)
+	 * enables it with the SLIMbus controller and adds the card's routes:
+	 * a card linked to a codec that never probes would also lose the
+	 * speakers.
+	 */
+	slimcap-dai-link {
+		link-name = "SLIM Capture 1";
+		status = "disabled";
+
+		cpu {
+			sound-dai = <&q6afedai SLIMBUS_0_TX>;
+		};
+
+		platform {
+			sound-dai = <&q6routing>;
+		};
+
+		codec {
+			sound-dai = <&wcd9340 1>; /* AIF1_CAP */
+		};
+	};
+};
+
+/*
+ * Microphones: a WCD9340 (Tavil) codec on SLIMbus, as OnePlus's downstream
+ * sm8150 tavil_codec (stock dtbo, project 19801): reset GPIO 143, its
+ * interrupt on GPIO 123, MCLK from LN_BB_CLK2 (downstream clock_audio_lnbb,
+ * RPMh clock 2), 1.8 V supplies from S4A and the micbias LDO's input from
+ * PM8150L BoB (downstream cdc-vdd-3v3 at 3.3 V). Micbias levels as stock:
+ * 2.7 V on MICBIAS1, 2 and 4, 1.8 V on MICBIAS3. Three analog microphones
+ * (stock mixer_paths_tavil.xml): AMIC4 is the voice mic ("handset-mic"),
+ * AMIC3 the recording mic ("handset-mic-rec") and AMIC1 the third; AMIC2 is
+ * the USB-C headset mic. The phone has no WSA speakers, so the codec's
+ * SoundWire master stays off.
+ *
+ * The SLIMbus controller stays disabled here; the mic bring-up overlay
+ * enables it.
+ */
+&slim {
+	slim@1 {
+		reg = <1>;
+		#address-cells = <2>;
+		#size-cells = <0>;
+
+		wcd9340_ifd: ifd@0,0 {
+			compatible = "slim217,250";
+			reg = <0 0>;
+		};
+
+		wcd9340: codec@1,0 {
+			compatible = "slim217,250";
+			reg = <1 0>;
+			slim-ifc-dev = <&wcd9340_ifd>;
+
+			#sound-dai-cells = <1>;
+
+			interrupts-extended = <&tlmm 123 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-controller;
+			#interrupt-cells = <1>;
+
+			clock-names = "extclk";
+			clocks = <&rpmhcc RPMH_LN_BB_CLK2>;
+
+			#clock-cells = <0>;
+			clock-frequency = <9600000>;
+			clock-output-names = "mclk";
+
+			pinctrl-0 = <&wcd_intr_default &wcd_reset_default>;
+			pinctrl-names = "default";
+
+			reset-gpios = <&tlmm 143 GPIO_ACTIVE_HIGH>;
+
+			vdd-buck-supply = <&vreg_s4a_1p8>;
+			vdd-buck-sido-supply = <&vreg_s4a_1p8>;
+			vdd-tx-supply = <&vreg_s4a_1p8>;
+			vdd-rx-supply = <&vreg_s4a_1p8>;
+			vdd-io-supply = <&vreg_s4a_1p8>;
+			vdd-micbias-supply = <&vreg_bob>;
+
+			qcom,micbias1-microvolt = <2700000>;
+			qcom,micbias2-microvolt = <2700000>;
+			qcom,micbias3-microvolt = <1800000>;
+			qcom,micbias4-microvolt = <2700000>;
+
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			wcdgpio: gpio-controller@42 {
+				compatible = "qcom,wcd9340-gpio";
+				gpio-controller;
+				#gpio-cells = <2>;
+				reg = <0x42 0x2>;
+			};
+
+			swm: soundwire@c85 {
+				compatible = "qcom,soundwire-v1.3.0";
+				reg = <0xc85 0x40>;
+				interrupts-extended = <&wcd9340 20>;
+
+				qcom,dout-ports = <6>;
+				qcom,din-ports = <2>;
+				qcom,ports-sinterval-low =
+					/bits/ 8 <0x07 0x1f 0x3f 0x07 0x1f 0x3f 0x0f 0x0f>;
+				qcom,ports-offset1 =
+					/bits/ 8 <0x01 0x02 0x0c 0x06 0x12 0x0d 0x07 0x0a>;
+				qcom,ports-offset2 =
+					/bits/ 8 <0x00 0x00 0x1f 0x00 0x00 0x1f 0x00 0x00>;
+
+				#sound-dai-cells = <1>;
+				clocks = <&wcd9340>;
+				clock-names = "iface";
+				#address-cells = <2>;
+				#size-cells = <0>;
+
+				status = "disabled";
+			};
+		};
+	};
 };
 
 /*
@@ -820,6 +941,22 @@
 			pins = "gpio45", "gpio46";
 			bias-pull-up;
 		};
+	};
+
+	/* Stock's wcd_intr_default. */
+	wcd_intr_default: wcd-intr-default-state {
+		pins = "gpio123";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	/* Stock's cdc_reset_active; the driver drives the level. */
+	wcd_reset_default: wcd-reset-default-state {
+		pins = "gpio143";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-pull-down;
 	};
 };
 
