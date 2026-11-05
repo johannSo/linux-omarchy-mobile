@@ -33,12 +33,13 @@
 #define CAMSS_CLOCK_MARGIN_DENOMINATOR 100
 
 /*
- * C-PHY encodes data by 16/7 ~ 2.28 bits/symbol
- * D-PHY doesn't encode data, thus 16/16 = 1 b/s
+ * The k of the pixel rate formula in Documentation/driver-api/media/tx-rx.rst:
+ * link_freq = pixel_rate * bits_per_sample * k / (2 * nr_of_lanes * 16).
+ * D-PHY carries one bit per UI (k = 16). C-PHY carries 16 bits in 7 symbols
+ * (k = 7), so its link frequency is half the symbol rate of one trio.
  */
-#define CAMSS_COMMON_PHY_DIVIDENT 16
-#define CAMSS_CPHY_DIVISOR 7
-#define CAMSS_DPHY_DIVISOR 16
+#define CAMSS_LINK_FREQ_K_DPHY 16
+#define CAMSS_LINK_FREQ_K_CPHY 7
 
 static const struct parent_dev_ops vfe_parent_dev_ops;
 
@@ -4882,20 +4883,22 @@ struct media_pad *camss_find_sensor_pad(struct media_entity *entity)
  * @lanes: Number of lanes in the link to the sensor
  * @cphy: If C-PHY encoding is used.
  *
+ * For C-PHY, @lanes is the number of trios and the link frequency is half the
+ * symbol rate of one trio, as for the V4L2_CID_LINK_FREQ control.
+ *
  * Return link frequency on success or a negative error code otherwise
  */
 s64 camss_get_link_freq(struct media_entity *entity, unsigned int bpp,
 			unsigned int lanes, const bool cphy)
 {
 	struct media_pad *sensor_pad;
-	unsigned int div = lanes * 2 * (cphy ? CAMSS_CPHY_DIVISOR :
-					       CAMSS_DPHY_DIVISOR);
+	unsigned int k = cphy ? CAMSS_LINK_FREQ_K_CPHY : CAMSS_LINK_FREQ_K_DPHY;
 
 	sensor_pad = camss_find_sensor_pad(entity);
 	if (!sensor_pad)
 		return -ENODEV;
 
-	return v4l2_get_link_freq(sensor_pad, CAMSS_COMMON_PHY_DIVIDENT * bpp, div);
+	return v4l2_get_link_freq(sensor_pad, bpp * k, 2 * lanes * 16);
 }
 
 /*
