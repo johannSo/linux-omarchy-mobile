@@ -1213,6 +1213,13 @@ static irqreturn_t csiphy_isr(int irq, void *dev)
  * based on the CSI2 T_hs_settle parameter which in turn
  * is calculated based on the CSI2 transmitter link frequency.
  *
+ * The same calculation serves C-PHY. Its link frequency is half the
+ * symbol rate of one trio (see camss_get_link_freq()), so ui below is
+ * then the symbol period. The settle time of 85 ns + 6 UI ends near the
+ * end of T3-PREPARE (38 to 95 ns), or in the preamble of a transmitter
+ * with a shorter T3-PREPARE; the receiver then synchronises on the sync
+ * word that follows the preamble.
+ *
  * Return settle count value or 0 if the CSI2 link frequency
  * is not available
  */
