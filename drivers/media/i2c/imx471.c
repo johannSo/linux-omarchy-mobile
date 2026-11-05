@@ -116,8 +116,15 @@
 
 #define to_imx471(_sd) container_of_const(_sd, struct imx471, sd)
 
+/*
+ * ACPI platforms describe only the analog supply; on devicetree boards the
+ * digital core and interface supplies are separate rails (dummies where a
+ * board leaves them out).
+ */
 static const char * const imx471_supply_name[] = {
 	"vana",
+	"vdig",
+	"vif",
 };
 
 struct imx471_mode {
@@ -939,10 +946,17 @@ static const struct acpi_device_id imx471_acpi_ids[] __maybe_unused = {
 };
 MODULE_DEVICE_TABLE(acpi, imx471_acpi_ids);
 
+static const struct of_device_id imx471_of_match[] = {
+	{ .compatible = "sony,imx471" },
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(of, imx471_of_match);
+
 static struct i2c_driver imx471_i2c_driver = {
 	.driver = {
 		.name = "imx471",
 		.acpi_match_table = ACPI_PTR(imx471_acpi_ids),
+		.of_match_table = imx471_of_match,
 		.pm = pm_sleep_ptr(&imx471_pm_ops),
 	},
 	.probe = imx471_probe,
