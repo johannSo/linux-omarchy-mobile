@@ -310,6 +310,19 @@ config VIDEO_IMX471
 	  To compile this driver as a module, choose M here: the
 	  module will be called imx471.
 
+config VIDEO_SONY_FWTABLE
+	tristate "Sony IMX481/IMX586 sensors with register tables from firmware"
+	depends on OF && GPIOLIB
+	select V4L2_CCI_I2C
+	select FW_LOADER
+	help
+	  Driver for the Sony IMX481 and IMX586 camera sensors that takes
+	  their initialisation and mode settings from a firmware file
+	  (the device tree's firmware-name) instead of built-in tables.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called sony-fwtable.
+
 config VIDEO_IMX678
 	tristate "Sony IMX678 sensor support"
 	depends on GPIOLIB
