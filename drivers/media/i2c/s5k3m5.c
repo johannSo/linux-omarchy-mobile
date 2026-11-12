@@ -51,6 +51,17 @@
 #define S5K3M5_REG_X_OUTPUT_SIZE	CCI_REG16(0x034c)
 #define S5K3M5_REG_Y_OUTPUT_SIZE	CCI_REG16(0x034e)
 
+/*
+ * The full mode reads columns 0x0000-0x1077 and rows 0x0008-0x0c37 and
+ * outputs 4208x3120 of them: that is the active area.
+ */
+#define S5K3M5_NATIVE_WIDTH		4216
+#define S5K3M5_NATIVE_HEIGHT		3128
+#define S5K3M5_PIXEL_ARRAY_LEFT		0
+#define S5K3M5_PIXEL_ARRAY_TOP		8
+#define S5K3M5_PIXEL_ARRAY_WIDTH	4208
+#define S5K3M5_PIXEL_ARRAY_HEIGHT	3120
+
 #define S5K3M5_REG_TEST_PATTERN		CCI_REG16(0x0600)
 
 #define to_s5k3m5(_sd)			container_of(_sd, struct s5k3m5, sd)
@@ -76,6 +87,7 @@ struct s5k3m5_mode {
 	u32 hts;			/* Horizontal timing size */
 	u32 vts;			/* Default vertical timing size */
 	u32 exposure;			/* Default exposure value */
+	struct v4l2_rect crop;		/* Analogue crop in the pixel array */
 
 	const struct s5k3m5_reg_list reg_list;	/* Sensor register setting */
 };
@@ -697,6 +709,12 @@ static const struct s5k3m5_mode s5k3m5_supported_modes[] = {
 		.hts = 4848,
 		.vts = 3314,
 		.exposure = 256,
+		.crop = {
+			.left = S5K3M5_PIXEL_ARRAY_LEFT,
+			.top = S5K3M5_PIXEL_ARRAY_TOP,
+			.width = S5K3M5_PIXEL_ARRAY_WIDTH,
+			.height = S5K3M5_PIXEL_ARRAY_HEIGHT,
+		},
 		.reg_list = {
 			.regs = s5k3m5_4208x3120_30fps_mode,
 			.num_regs = ARRAY_SIZE(s5k3m5_4208x3120_30fps_mode),
@@ -708,6 +726,13 @@ static const struct s5k3m5_mode s5k3m5_supported_modes[] = {
 		.hts = 4928,
 		.vts = 1624,
 		.exposure = 256,
+		/* rows 0x0180-0x0abf, binned 2x2 */
+		.crop = {
+			.left = S5K3M5_PIXEL_ARRAY_LEFT,
+			.top = 384,
+			.width = S5K3M5_PIXEL_ARRAY_WIDTH,
+			.height = 2368,
+		},
 		.reg_list = {
 			.regs = s5k3m5_2104x1184_60fps_mode,
 			.num_regs = ARRAY_SIZE(s5k3m5_2104x1184_60fps_mode),
@@ -1048,11 +1073,20 @@ static int s5k3m5_get_selection(struct v4l2_subdev *sd,
 
 	switch (sel->target) {
 	case V4L2_SEL_TGT_CROP:
+		sel->r = s5k3m5->mode->crop;
+		return 0;
+	case V4L2_SEL_TGT_CROP_DEFAULT:
+		sel->r.left = S5K3M5_PIXEL_ARRAY_LEFT;
+		sel->r.top = S5K3M5_PIXEL_ARRAY_TOP;
+		sel->r.width = S5K3M5_PIXEL_ARRAY_WIDTH;
+		sel->r.height = S5K3M5_PIXEL_ARRAY_HEIGHT;
+		return 0;
 	case V4L2_SEL_TGT_CROP_BOUNDS:
+	case V4L2_SEL_TGT_NATIVE_SIZE:
 		sel->r.left = 0;
 		sel->r.top = 0;
-		sel->r.width = s5k3m5->mode->width;
-		sel->r.height = s5k3m5->mode->width;
+		sel->r.width = S5K3M5_NATIVE_WIDTH;
+		sel->r.height = S5K3M5_NATIVE_HEIGHT;
 		return 0;
 	default:
 		return -EINVAL;
