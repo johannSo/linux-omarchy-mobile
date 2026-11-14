@@ -118,19 +118,70 @@ static const struct tfa987x_reg tfa9874_0c74_init[] = {
 	{ 0x84, 0x0081 },
 };
 
+struct tfa987x {
+	bool muted;	/* the stream's mute */
+	bool amp_off;	/* "Amp Switch" off */
+};
+
+/* The amplifier runs while the stream is unmuted and its switch is on */
+static void tfa987x_update_ampe(struct snd_soc_component *component)
+{
+	struct tfa987x *tfa = snd_soc_component_get_drvdata(component);
+	int val = tfa->muted || tfa->amp_off ? 0 : TFA987X_SYS_CTRL0_AMPE_MSK;
+
+	snd_soc_component_update_bits(component, TFA987X_SYS_CTRL0,
+				      TFA987X_SYS_CTRL0_AMPE_MSK, val);
+}
+
 static int tfa987x_digital_mute(struct snd_soc_dai *codec_dai, int mute, int stream)
 {
 	struct snd_soc_component *component = codec_dai->component;
-	int val = mute ? 0 : TFA987X_SYS_CTRL0_AMPE_MSK;
+	struct tfa987x *tfa = snd_soc_component_get_drvdata(component);
 
 	if (stream != SNDRV_PCM_STREAM_PLAYBACK)
 		return 0;
 
-	snd_soc_component_update_bits(component, TFA987X_SYS_CTRL0,
-						 TFA987X_SYS_CTRL0_AMPE_MSK, val);
+	tfa->muted = mute;
+	tfa987x_update_ampe(component);
 
 	return 0;
 }
+
+static int tfa987x_amp_get(struct snd_kcontrol *kcontrol,
+			   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
+	struct tfa987x *tfa = snd_soc_component_get_drvdata(component);
+
+	ucontrol->value.integer.value[0] = !tfa->amp_off;
+
+	return 0;
+}
+
+static int tfa987x_amp_put(struct snd_kcontrol *kcontrol,
+			   struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
+	struct tfa987x *tfa = snd_soc_component_get_drvdata(component);
+	bool off = !ucontrol->value.integer.value[0];
+
+	if (off == tfa->amp_off)
+		return 0;
+
+	tfa->amp_off = off;
+	tfa987x_update_ampe(component);
+
+	return 1;
+}
+
+/*
+ * Two of these share one I2S stream on phones (an earpiece that doubles
+ * as the top speaker, and the bottom speaker), so silencing one is the only
+ * way to tell the earpiece from the speakers during a call.
+ */
+static const struct snd_kcontrol_new tfa987x_controls[] = {
+	SOC_SINGLE_BOOL_EXT("Amp Switch", 0, tfa987x_amp_get, tfa987x_amp_put),
+};
 
 static const struct snd_soc_dapm_widget tfa987x_dapm_widgets[] = {
 	SND_SOC_DAPM_OUTPUT("Speaker"),
@@ -143,6 +194,8 @@ static const struct snd_soc_dapm_route tfa987x_dapm_routes[] = {
 };
 
 static const struct snd_soc_component_driver tfa987x_component = {
+	.controls		= tfa987x_controls,
+	.num_controls		= ARRAY_SIZE(tfa987x_controls),
 	.dapm_widgets		= tfa987x_dapm_widgets,
 	.num_dapm_widgets	= ARRAY_SIZE(tfa987x_dapm_widgets),
 	.dapm_routes		= tfa987x_dapm_routes,
@@ -319,6 +372,7 @@ static int tfa987x_i2c_probe(struct i2c_client *i2c)
 	struct device *dev = &i2c->dev;
 	struct gpio_desc *reset;
 	struct regmap *rmap;
+	struct tfa987x *tfa;
 	unsigned int rev;
 	int ret;
 
@@ -331,6 +385,12 @@ static int tfa987x_i2c_probe(struct i2c_client *i2c)
 		gpiod_set_value_cansleep(reset, 0);
 		usleep_range(1000, 2000);
 	}
+
+	tfa = devm_kzalloc(dev, sizeof(*tfa), GFP_KERNEL);
+	if (!tfa)
+		return -ENOMEM;
+	tfa->muted = true;
+	i2c_set_clientdata(i2c, tfa);
 
 	rmap = devm_regmap_init_i2c(i2c, &tfa987x_regmap_config);
 	if (IS_ERR(rmap))
