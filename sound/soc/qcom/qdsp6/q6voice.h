@@ -30,4 +30,9 @@ u32 q6voice_get_topology(struct q6voice *v, enum q6voice_path_type path,
 void q6voice_set_topology(struct q6voice *v, enum q6voice_path_type path,
 			  bool capture, u32 topo);
 
+unsigned int q6voice_get_tx_channels(struct q6voice *v,
+				     enum q6voice_path_type path);
+void q6voice_set_tx_channels(struct q6voice *v, enum q6voice_path_type path,
+			     unsigned int channels);
+
 #endif /* _Q6_VOICE_H */

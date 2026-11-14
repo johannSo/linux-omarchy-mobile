@@ -16,6 +16,16 @@
 #define VSS_IVOCPROC_TOPOLOGY_ID_TX_SM_ECNS		0x00010F71
 #define VSS_IVOCPROC_TOPOLOGY_ID_RX_DEFAULT		0x00010F77
 
+/*
+ * Lets a phone try the CVD 2.3 session sequence (which also sends the
+ * devices' channel info and media format) without a new device tree.
+ * Read when a session is created.
+ */
+static int cvd_v2_3_override = -1;
+module_param(cvd_v2_3_override, int, 0644);
+MODULE_PARM_DESC(cvd_v2_3_override,
+		 "CVD 2.3 session sequence: -1 as the device tree says, 0 off, 1 on");
+
 struct q6voice_path_runtime {
 	struct q6voice_session *sessions[Q6VOICE_SERVICE_COUNT];
 	unsigned int started;
@@ -27,6 +37,7 @@ struct q6voice_path {
 	enum q6voice_path_type type;
 	int tx_port, rx_port;
 	u32 tx_topo, rx_topo;
+	unsigned int tx_channels;
 	/* Serialize access to voice path session */
 	struct mutex lock;
 	struct q6voice_path_runtime *runtime;
@@ -47,7 +58,8 @@ static inline struct q6voice_session *session_create(enum q6voice_path_type type
 
 static struct q6voice_session *session_create_v3(enum q6voice_path_type type,
 						 int tx_port, int rx_port,
-						 u32 tx_topo, u32 rx_topo)
+						 u32 tx_topo, u32 rx_topo,
+						 unsigned int tx_channels)
 {
 	struct q6voice_session *cvp;
 
@@ -55,11 +67,11 @@ static struct q6voice_session *session_create_v3(enum q6voice_path_type type,
 	if (cvp == NULL)
 		return NULL;
 
-	q6cvp_send_channel_info(cvp, false);
-	q6cvp_send_channel_info(cvp, true);
+	q6cvp_send_channel_info(cvp, false, 2);
+	q6cvp_send_channel_info(cvp, true, tx_channels);
 
-	q6cvp_send_media_format(cvp, rx_port, false);
-	q6cvp_send_media_format(cvp, tx_port, true);
+	q6cvp_send_media_format(cvp, rx_port, false, 2);
+	q6cvp_send_media_format(cvp, tx_port, true, tx_channels);
 
 	q6cvp_topology_commit(cvp);
 
@@ -84,11 +96,15 @@ static int q6voice_path_start(struct q6voice_path *p)
 
 	cvp = p->runtime->sessions[Q6VOICE_SERVICE_CVP];
 	if (!cvp) {
-		if (p->v->cvd_v2_3)
+		bool v2_3 = cvd_v2_3_override < 0 ? p->v->cvd_v2_3
+						   : cvd_v2_3_override;
+
+		if (v2_3)
 			cvp = session_create_v3(p->type,
 						q6afe_get_port_id(p->tx_port),
 						q6afe_get_port_id(p->rx_port),
-						p->tx_topo, p->rx_topo);
+						p->tx_topo, p->rx_topo,
+						p->tx_channels);
 		else
 			cvp = session_create(p->type,
 					     q6afe_get_port_id(p->tx_port),
@@ -269,6 +285,7 @@ struct q6voice *q6voice_create(struct device *dev, bool cvd_v2_3)
 		p->type = path;
 		p->tx_topo = VSS_IVOCPROC_TOPOLOGY_ID_TX_SM_ECNS;
 		p->rx_topo = VSS_IVOCPROC_TOPOLOGY_ID_RX_DEFAULT;
+		p->tx_channels = 1;
 		mutex_init(&p->lock);
 	}
 
@@ -327,6 +344,20 @@ void q6voice_set_topology(struct q6voice *v, enum q6voice_path_type path,
 		p->rx_topo = topo;
 }
 EXPORT_SYMBOL_GPL(q6voice_set_topology);
+
+unsigned int q6voice_get_tx_channels(struct q6voice *v,
+				     enum q6voice_path_type path)
+{
+	return v->paths[path].tx_channels;
+}
+EXPORT_SYMBOL_GPL(q6voice_get_tx_channels);
+
+void q6voice_set_tx_channels(struct q6voice *v, enum q6voice_path_type path,
+			     unsigned int channels)
+{
+	v->paths[path].tx_channels = clamp(channels, 1U, 3U);
+}
+EXPORT_SYMBOL_GPL(q6voice_set_tx_channels);
 
 MODULE_AUTHOR("Stephan Gerhold <stephan@gerhold.net>");
 MODULE_DESCRIPTION("Q6Voice driver");

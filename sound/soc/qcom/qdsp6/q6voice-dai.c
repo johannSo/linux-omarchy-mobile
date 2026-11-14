@@ -236,7 +236,47 @@ static int q6voice_put_topology_kctrl(struct snd_kcontrol *kcontrol,
 	return 1;
 }
 
+static int q6voice_get_tx_channels_kctrl(struct snd_kcontrol *kcontrol,
+					 struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
+	struct soc_mixer_control *mc =
+		(struct soc_mixer_control *)kcontrol->private_value;
+	struct q6voice *v = snd_soc_component_get_drvdata(c);
+	enum q6voice_path_type path = q6voice_get_path(mc->reg);
+
+	if (path >= Q6VOICE_PATH_COUNT)
+		return -EINVAL;
+
+	ucontrol->value.integer.value[0] = q6voice_get_tx_channels(v, path);
+	return 0;
+}
+
+static int q6voice_put_tx_channels_kctrl(struct snd_kcontrol *kcontrol,
+					 struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *c = snd_kcontrol_chip(kcontrol);
+	struct soc_mixer_control *mc =
+		(struct soc_mixer_control *)kcontrol->private_value;
+	struct q6voice *v = snd_soc_component_get_drvdata(c);
+	enum q6voice_path_type path = q6voice_get_path(mc->reg);
+	long val = ucontrol->value.integer.value[0];
+
+	if (path >= Q6VOICE_PATH_COUNT || val < 1 || val > 3)
+		return -EINVAL;
+
+	if (q6voice_get_tx_channels(v, path) == val)
+		return 0;
+
+	q6voice_set_tx_channels(v, path, val);
+	return 1;
+}
+
 static const struct snd_kcontrol_new q6voice_kcontrols[] = {
+	/* Microphones on the Tx port, used by the CVD 2.3 sequence */
+	SOC_SINGLE_EXT("VoiceMMode1 TX Channels", VOICEMMODE1, 0, 3, 0,
+		       q6voice_get_tx_channels_kctrl,
+		       q6voice_put_tx_channels_kctrl),
 	SOC_SINGLE_EXT("VoiceMMode1 TX Topology", VOICEMMODE1, 1, S32_MAX, 0,
 		       q6voice_get_topology_kctrl, q6voice_put_topology_kctrl),
 	SOC_SINGLE_EXT("VoiceMMode1 RX Topology", VOICEMMODE1, 0, S32_MAX, 0,

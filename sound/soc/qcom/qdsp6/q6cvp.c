@@ -213,7 +213,27 @@ struct q6voice_session *q6cvp_session_create_v3(enum q6voice_path_type path,
 }
 EXPORT_SYMBOL_GPL(q6cvp_session_create_v3);
 
-int q6cvp_send_channel_info(struct q6voice_session *cvp, bool is_tx)
+/*
+ * The device channel map: Tx carries one microphone per channel (FL, FR, FC
+ * for up to three), Rx is the stereo pair as before.
+ */
+static void q6cvp_channel_map(u8 *map, bool is_tx, unsigned int channels)
+{
+	unsigned int i;
+
+	memset(map, 0, VSS_NUM_CHANNELS_MAX);
+	if (!is_tx) {
+		map[0] = 1;
+		map[1] = 1;
+		return;
+	}
+
+	for (i = 0; i < channels && i < 3; i++)
+		map[i] = i + 1;
+}
+
+int q6cvp_send_channel_info(struct q6voice_session *cvp, bool is_tx,
+			    unsigned int channels)
 {
 	struct vss_icommon_cmd_set_param_v2_cmd cmd;
 
@@ -232,31 +252,17 @@ int q6cvp_send_channel_info(struct q6voice_session *cvp, bool is_tx)
 	cmd.param_data.param_size = sizeof(struct vss_param_vocproc_dev_channel_info);
 	cmd.param_data.reserved = 0;
 
-	if (is_tx)
-		cmd.param_data.channel_info.num_channels = 1;
-	else
-		cmd.param_data.channel_info.num_channels = 2;
-
+	cmd.param_data.channel_info.num_channels = is_tx ? channels : 2;
 	cmd.param_data.channel_info.bits_per_sample = 16;
-	cmd.param_data.channel_info.channel_mapping[0] = 1;
-
-	if (is_tx)
-		cmd.param_data.channel_info.channel_mapping[1] = 0;
-	else
-		cmd.param_data.channel_info.channel_mapping[1] = 1;
-
-	cmd.param_data.channel_info.channel_mapping[2] = 0;
-	cmd.param_data.channel_info.channel_mapping[3] = 0;
-	cmd.param_data.channel_info.channel_mapping[4] = 0;
-	cmd.param_data.channel_info.channel_mapping[5] = 0;
-	cmd.param_data.channel_info.channel_mapping[6] = 0;
-	cmd.param_data.channel_info.channel_mapping[7] = 0;
+	q6cvp_channel_map(cmd.param_data.channel_info.channel_mapping, is_tx,
+			  channels);
 
 	return q6voice_common_send(cvp, &cmd.hdr);
 }
 EXPORT_SYMBOL_GPL(q6cvp_send_channel_info);
 
-int q6cvp_send_media_format(struct q6voice_session *cvp, int port_id, bool is_tx)
+int q6cvp_send_media_format(struct q6voice_session *cvp, int port_id, bool is_tx,
+			    unsigned int channels)
 {
 	struct vss_icommon_cmd_set_param_v2_cmd cmd;
 
@@ -277,26 +283,11 @@ int q6cvp_send_media_format(struct q6voice_session *cvp, int port_id, bool is_tx
 
 	cmd.param_data.media_format_info.port_id = port_id;
 
-	if (is_tx)
-		cmd.param_data.media_format_info.num_channels = 1;
-	else
-		cmd.param_data.media_format_info.num_channels = 2;
-
+	cmd.param_data.media_format_info.num_channels = is_tx ? channels : 2;
 	cmd.param_data.media_format_info.bits_per_sample = 16;
 	cmd.param_data.media_format_info.sample_rate = 48000;
-	cmd.param_data.media_format_info.channel_mapping[0] = 1;
-
-	if (is_tx)
-		cmd.param_data.media_format_info.channel_mapping[1] = 0;
-	else
-		cmd.param_data.media_format_info.channel_mapping[1] = 1;
-
-	cmd.param_data.media_format_info.channel_mapping[2] = 0;
-	cmd.param_data.media_format_info.channel_mapping[3] = 0;
-	cmd.param_data.media_format_info.channel_mapping[4] = 0;
-	cmd.param_data.media_format_info.channel_mapping[5] = 0;
-	cmd.param_data.media_format_info.channel_mapping[6] = 0;
-	cmd.param_data.media_format_info.channel_mapping[7] = 0;
+	q6cvp_channel_map(cmd.param_data.media_format_info.channel_mapping,
+			  is_tx, channels);
 
 	return q6voice_common_send(cvp, &cmd.hdr);
 }
