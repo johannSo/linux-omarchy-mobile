@@ -179,8 +179,14 @@ static int tfa987x_amp_put(struct snd_kcontrol *kcontrol,
  * as the top speaker, and the bottom speaker), so silencing one is the only
  * way to tell the earpiece from the speakers during a call.
  */
+/*
+ * "Speaker Gain" is the TDM speaker gain field (TDMSPKG). NXP's container
+ * for the OnePlus 7T Pro sets it to 4 in its speaker profile and to 13 in
+ * the earpiece's receiver profile.
+ */
 static const struct snd_kcontrol_new tfa987x_controls[] = {
 	SOC_SINGLE_BOOL_EXT("Amp Switch", 0, tfa987x_amp_get, tfa987x_amp_put),
+	SOC_SINGLE("Speaker Gain", TFA987X_TDM_CFG8, 6, 15, 0),
 };
 
 static const struct snd_soc_dapm_widget tfa987x_dapm_widgets[] = {
