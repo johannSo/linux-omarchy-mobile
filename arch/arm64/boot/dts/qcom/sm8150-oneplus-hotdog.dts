@@ -28,6 +28,7 @@
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/leds/common.h>
 #include <dt-bindings/sound/qcom,q6asm.h>
+#include <dt-bindings/sound/qcom,q6voice.h>
 #include <dt-bindings/media/video-interfaces.h>
 #include "sm8150-oneplus-common.dtsi"
 
@@ -697,6 +698,28 @@
 		codec {
 			sound-dai = <&wcd9340 1>; /* AIF1_CAP */
 		};
+	};
+
+	/*
+	 * Call audio: the ADSP's voice front end. The modem's voice stream
+	 * runs from the ADSP to the speakers' MI2S port and from the codec's
+	 * SLIMbus capture; no audio passes through Linux. Off until the call
+	 * audio bring-up (MODEM-PLAN.md, overlays/voice.dtso) turns it on
+	 * with the voice services.
+	 */
+	voicemmode1-dai-link {
+		link-name = "VoiceMMode1";
+		status = "disabled";
+
+		cpu {
+			sound-dai = <&q6voicedai VOICEMMODE1>;
+		};
+	};
+};
+
+&q6voicedai {
+	dai@1 {
+		reg = <VOICEMMODE1>;
 	};
 };
 
