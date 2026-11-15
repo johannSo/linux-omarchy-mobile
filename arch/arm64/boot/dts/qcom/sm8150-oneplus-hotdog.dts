@@ -45,6 +45,8 @@
 	 * OnePlus 6's slider in sdm845-oneplus-common.dtsi, whose vendor node
 	 * lists its lines the same way (key1 bottom, key3 top). Reported as
 	 * ABS_SND_PROFILE, the event the input core defines for such switches.
+	 * All three lines are in the PDC's wake map, so a move wakes the phone
+	 * from suspend and the new profile applies at once.
 	 */
 	alert-slider {
 		compatible = "gpio-keys";
@@ -60,6 +62,7 @@
 			linux,input-value = <SND_PROFILE_SILENT>;
 			gpios = <&tlmm 125 GPIO_ACTIVE_LOW>;
 			linux,can-disable;
+			wakeup-source;
 		};
 
 		switch-middle {
@@ -69,6 +72,7 @@
 			linux,input-value = <SND_PROFILE_VIBRATE>;
 			gpios = <&tlmm 134 GPIO_ACTIVE_LOW>;
 			linux,can-disable;
+			wakeup-source;
 		};
 
 		switch-bottom {
@@ -78,6 +82,7 @@
 			linux,input-value = <SND_PROFILE_RING>;
 			gpios = <&tlmm 27 GPIO_ACTIVE_LOW>;
 			linux,can-disable;
+			wakeup-source;
 		};
 	};
 
