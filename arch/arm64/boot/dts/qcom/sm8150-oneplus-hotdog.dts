@@ -16,8 +16,8 @@
  * Reserved regions from OnePlus's downstream sm8150.dtsi and sm8150-oem.dtsi.
  *
  * Enabled: the panel as ABL left it (simple-framebuffer), UFS, USB
- * peripheral, touch (S6SY761), the fuel gauge (BQ27411) and the power
- * key.
+ * peripheral, touch (S6SY761), the fuel gauge (BQ27411), the power and
+ * volume keys and the alert slider.
  */
 
 /dts-v1/;
@@ -37,6 +37,49 @@
 
 	qcom,msm-id = <QCOM_ID_SM8150 0x20000>, <361 0x20000>; /* SM8150, SM8150P v2 */
 	qcom,board-id = <8 0>;
+
+	/*
+	 * The three-position alert slider: one line per position, from the
+	 * vendor tri-state-key node (gpio_key1 = TLMM 27, gpio_key2 = TLMM 134,
+	 * gpio_key3 = TLMM 125, no internal bias). The order follows the
+	 * OnePlus 6's slider in sdm845-oneplus-common.dtsi, whose vendor node
+	 * lists its lines the same way (key1 bottom, key3 top). Reported as
+	 * ABS_SND_PROFILE, the event the input core defines for such switches.
+	 */
+	alert-slider {
+		compatible = "gpio-keys";
+		label = "Alert slider";
+
+		pinctrl-0 = <&alert_slider_default>;
+		pinctrl-names = "default";
+
+		switch-top {
+			label = "Silent";
+			linux,input-type = <EV_ABS>;
+			linux,code = <ABS_SND_PROFILE>;
+			linux,input-value = <SND_PROFILE_SILENT>;
+			gpios = <&tlmm 125 GPIO_ACTIVE_LOW>;
+			linux,can-disable;
+		};
+
+		switch-middle {
+			label = "Vibrate";
+			linux,input-type = <EV_ABS>;
+			linux,code = <ABS_SND_PROFILE>;
+			linux,input-value = <SND_PROFILE_VIBRATE>;
+			gpios = <&tlmm 134 GPIO_ACTIVE_LOW>;
+			linux,can-disable;
+		};
+
+		switch-bottom {
+			label = "Ring";
+			linux,input-type = <EV_ABS>;
+			linux,code = <ABS_SND_PROFILE>;
+			linux,input-value = <SND_PROFILE_RING>;
+			gpios = <&tlmm 27 GPIO_ACTIVE_LOW>;
+			linux,can-disable;
+		};
+	};
 
 	aliases {
 		display0 = &framebuffer0;
@@ -63,6 +106,41 @@
 
 		pinctrl-0 = <&fp_irq_default &fp_reset_default &qup_spi3_default>;
 		pinctrl-names = "default";
+	};
+
+	/*
+	 * The volume keys are PM8150 GPIO6 (up) and GPIO7 (down), active low with
+	 * the PMIC's pull-up at the 1.8 V vin-1, as in the vendor gpio_keys node.
+	 * Sampled on the phone on 2026-11-15: GPIO6 low only while Volume Up was
+	 * held, GPIO7 only while Volume Down was. The vendor tree also gives
+	 * PON RESIN KEY_VOLUMEDOWN; it stays disabled (as pm8150.dtsi leaves
+	 * it) so one press can't report twice.
+	 */
+	gpio-keys {
+		compatible = "gpio-keys";
+		label = "Volume keys";
+		autorepeat;
+
+		pinctrl-0 = <&vol_up_n>, <&vol_down_n>;
+		pinctrl-names = "default";
+
+		key-vol-up {
+			label = "Volume Up";
+			linux,code = <KEY_VOLUMEUP>;
+			gpios = <&pm8150_gpios 6 GPIO_ACTIVE_LOW>;
+			debounce-interval = <15>;
+			linux,can-disable;
+			wakeup-source;
+		};
+
+		key-vol-down {
+			label = "Volume Down";
+			linux,code = <KEY_VOLUMEDOWN>;
+			gpios = <&pm8150_gpios 7 GPIO_ACTIVE_LOW>;
+			debounce-interval = <15>;
+			linux,can-disable;
+			wakeup-source;
+		};
 	};
 
 	/*
@@ -220,6 +298,24 @@
 	mode-recovery = <0x1>;
 };
 
+&pm8150_gpios {
+	vol_up_n: vol-up-n-state {
+		pins = "gpio6";
+		function = "normal";
+		power-source = <1>;
+		bias-pull-up;
+		input-enable;
+	};
+
+	vol_down_n: vol-down-n-state {
+		pins = "gpio7";
+		function = "normal";
+		power-source = <1>;
+		bias-pull-up;
+		input-enable;
+	};
+};
+
 &gmu {
 	status = "okay";
 };
@@ -357,6 +453,13 @@
 };
 
 &tlmm {
+	alert_slider_default: alert-slider-default-state {
+		pins = "gpio27", "gpio125", "gpio134";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
 	panel_reset_default: panel-reset-default-state {
 		pins = "gpio6";
 		function = "gpio";
