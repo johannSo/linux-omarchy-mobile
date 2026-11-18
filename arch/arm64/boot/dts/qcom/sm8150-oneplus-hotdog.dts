@@ -334,6 +334,27 @@
 	firmware-name = "qcom/sm8150/oneplus/hotdog/a640_zap.mbn";
 };
 
+/*
+ * Downstream qupv3_se7_i2c: the Awinic AW8697 LRA haptics driver (stock
+ * aw8697_haptic@5A, reset on GPIO 116, interrupt on GPIO 24). The chip
+ * measured the actuator at 175-176 Hz; OnePlus ships waveform sets for
+ * 166 to 174 Hz.
+ */
+&i2c7 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	vibrator@5a {
+		compatible = "awinic,aw8697";
+		reg = <0x5a>;
+		interrupts-extended = <&tlmm 24 IRQ_TYPE_EDGE_FALLING>;
+		reset-gpios = <&tlmm 116 GPIO_ACTIVE_LOW>;
+		pinctrl-0 = <&haptics_irq_default &haptics_reset_default>;
+		pinctrl-names = "default";
+		awinic,f0-hz = <170>;
+	};
+};
+
 /* Downstream qupv3_se8_i2c: fuel gauge and OnePlus's fast-charge MCU. */
 &i2c8 {
 	clock-frequency = <100000>;
@@ -348,6 +369,10 @@
 		compatible = "ti,bq27411";
 		reg = <0x55>;
 	};
+};
+
+&qupv3_id_0 {
+	status = "okay";
 };
 
 &qupv3_id_2 {
@@ -494,6 +519,22 @@
 		function = "gpio";
 		drive-strength = <8>;
 		bias-pull-down;
+	};
+
+	/* Haptics pins as stock's aw_irq and aw_reset (whose names are swapped). */
+	haptics_irq_default: haptics-irq-default-state {
+		pins = "gpio24";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		output-disable;
+	};
+
+	haptics_reset_default: haptics-reset-default-state {
+		pins = "gpio116";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
 	};
 
 	mdss_te_default: mdss-te-default-state {
