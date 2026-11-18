@@ -38,6 +38,13 @@ properties:
   avdd-supply: true
   vdd-supply: true
 
+  samsung,ear-detect:
+    type: boolean
+    description:
+      The firmware has the hover mode OnePlus's phones use to tell that the
+      phone is held to an ear. The driver then offers a proximity switch,
+      read from the controller's delta map while it is open.
+
 unevaluatedProperties: false
 
 required:
