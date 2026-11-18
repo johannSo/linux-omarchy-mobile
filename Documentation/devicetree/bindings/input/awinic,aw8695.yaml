@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/input/awinic,aw8695.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Awinic AW8695 and AW8697 LRA haptics drivers
+
+maintainers:
+  - Dmitry Torokhov <dmitry.torokhov@gmail.com>
+
+description:
+  I2C haptics drivers for a linear resonant actuator (LRA), with a waveform
+  RAM, a boost converter and resonant frequency detection. The AW8697 has
+  the AW8695's register map and a different chip ID.
+
+properties:
+  compatible:
+    enum:
+      - awinic,aw8695
+      - awinic,aw8697
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+
+  reset-gpios:
+    maxItems: 1
+
+  awinic,f0-hz:
+    description:
+      Resonant frequency of the actuator, in Hz. The chip measures it at
+      probe; a measurement far from this value is not used.
+    minimum: 50
+    maximum: 500
+
+required:
+  - compatible
+  - reg
+  - awinic,f0-hz
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+    #include <dt-bindings/interrupt-controller/irq.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        vibrator@5a {
+            compatible = "awinic,aw8697";
+            reg = <0x5a>;
+            interrupts-extended = <&tlmm 24 IRQ_TYPE_EDGE_FALLING>;
+            reset-gpios = <&tlmm 116 GPIO_ACTIVE_LOW>;
+            awinic,f0-hz = <170>;
+        };
+    };
