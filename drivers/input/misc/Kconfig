@@ -137,6 +137,18 @@ config INPUT_AW86927
 	  To compile this driver as a module, choose M here: the
 	  module will be called aw86927.
 
+config INPUT_AW8695_HAPTICS
+	tristate "Awinic AW8695/AW8697 haptics support"
+	depends on I2C && INPUT
+	select INPUT_FF_MEMLESS
+	select REGMAP_I2C
+	help
+	  Say Y here if you have an Awinic AW8695 or AW8697 LRA haptics
+	  driver chip.
+
+	  To compile this driver as a module, choose M here: the module will
+	  be called aw8695-haptics.
+
 config INPUT_BBNSM_PWRKEY
 	tristate "NXP BBNSM Power Key Driver"
 	depends on ARCH_MXC || COMPILE_TEST
