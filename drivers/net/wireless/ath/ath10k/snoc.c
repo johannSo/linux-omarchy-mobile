@@ -1523,6 +1523,7 @@ static int ath10k_snoc_modem_notify(struct notifier_block *nb, unsigned long act
 	case QCOM_SSR_BEFORE_POWERUP:
 		ath10k_dbg(ar, ATH10K_DBG_SNOC, "received modem starting event\n");
 		clear_bit(ATH10K_SNOC_FLAG_MODEM_STOPPED, &ar_snoc->flags);
+		clear_bit(ATH10K_SNOC_FLAG_MODEM_SHUTDOWN, &ar_snoc->flags);
 		break;
 
 	case QCOM_SSR_AFTER_POWERUP:
@@ -1536,10 +1537,13 @@ static int ath10k_snoc_modem_notify(struct notifier_block *nb, unsigned long act
 			set_bit(ATH10K_SNOC_FLAG_MODEM_STOPPED, &ar_snoc->flags);
 		else
 			clear_bit(ATH10K_SNOC_FLAG_MODEM_STOPPED, &ar_snoc->flags);
+		set_bit(ATH10K_SNOC_FLAG_MODEM_SHUTDOWN, &ar_snoc->flags);
 		break;
 
 	case QCOM_SSR_AFTER_SHUTDOWN:
 		ath10k_dbg(ar, ATH10K_DBG_SNOC, "received modem offline event\n");
+		clear_bit(ATH10K_SNOC_FLAG_MODEM_SHUTDOWN, &ar_snoc->flags);
+		ath10k_qmi_modem_off(ar);
 		break;
 
 	default:

@@ -99,6 +99,7 @@ static int ath10k_qmi_setup_msa_permissions(struct ath10k_qmi *qmi)
 			goto err_unmap;
 	}
 
+	WRITE_ONCE(qmi->msa_assigned, true);
 	return 0;
 
 err_unmap:
@@ -114,8 +115,27 @@ static void ath10k_qmi_remove_msa_permission(struct ath10k_qmi *qmi)
 	if (qmi->msa_fixed_perm)
 		return;
 
+	/* Once: from the server's exit or from the modem's shutdown */
+	if (!xchg(&qmi->msa_assigned, false))
+		return;
+
 	for (i = 0; i < qmi->nr_mem_region; i++)
 		ath10k_qmi_unmap_msa_permission(qmi, &qmi->mem_region[i]);
+}
+
+/**
+ * ath10k_qmi_modem_off() - return MSA to HLOS once the modem is off
+ * @ar: the ath10k device
+ *
+ * Called after a modem shutdown (QCOM_SSR_AFTER_SHUTDOWN), when nothing can
+ * reach MSA any more. See ath10k_qmi_event_server_exit().
+ */
+void ath10k_qmi_modem_off(struct ath10k *ar)
+{
+	struct ath10k_snoc *ar_snoc = ath10k_snoc_priv(ar);
+
+	if (ar_snoc->qmi)
+		ath10k_qmi_remove_msa_permission(ar_snoc->qmi);
 }
 
 static int ath10k_qmi_msa_mem_info_send_sync_msg(struct ath10k_qmi *qmi)
@@ -905,7 +925,19 @@ static void ath10k_qmi_event_server_exit(struct ath10k_qmi *qmi)
 	struct ath10k *ar = qmi->ar;
 	struct ath10k_snoc *ar_snoc = ath10k_snoc_priv(ar);
 
-	ath10k_qmi_remove_msa_permission(qmi);
+	/*
+	 * When the modem is shutting down (a crash or a stop), its WLAN
+	 * firmware and the WCN3990 can still access MSA until it is off.
+	 * Assigned back to HLOS before that, such an access is an XPU
+	 * violation and the SoC resets into its crash dump (seen on SM8150).
+	 * Keep the permissions until the modem is off; ath10k_qmi_modem_off()
+	 * returns them then.
+	 */
+	if (test_bit(ATH10K_SNOC_FLAG_MODEM_SHUTDOWN, &ar_snoc->flags))
+		ath10k_dbg(ar, ATH10K_DBG_QMI,
+			   "modem shutting down, MSA kept until it is off\n");
+	else
+		ath10k_qmi_remove_msa_permission(qmi);
 	ath10k_core_free_board_files(ar);
 	if (!test_bit(ATH10K_SNOC_FLAG_UNREGISTERING, &ar_snoc->flags) &&
 	    !test_bit(ATH10K_SNOC_FLAG_MODEM_STOPPED, &ar_snoc->flags))
