@@ -326,6 +326,8 @@ struct fastrpc_channel_ctx {
 	atomic_t ctx_seq;
 	u64 dma_mask;
 	const struct fastrpc_soc_data *soc_data;
+	/* The DSP sends IOVAs with the SID in them: map them there (SM8150 SDSP) */
+	bool sid_in_iova;
 };
 
 struct fastrpc_device {
@@ -360,6 +362,8 @@ struct fastrpc_user {
 /* Extract SMMU PA from consolidated IOVA */
 static inline dma_addr_t fastrpc_ipa_to_dma_addr(struct fastrpc_channel_ctx *cctx, dma_addr_t iova)
 {
+	if (cctx->sid_in_iova)
+		return iova;
 	if (!cctx->soc_data->sid_pos)
 		return 0;
 	return iova & GENMASK_ULL(cctx->soc_data->sid_pos - 1, 0);
@@ -372,7 +376,29 @@ static inline dma_addr_t fastrpc_ipa_to_dma_addr(struct fastrpc_channel_ctx *cct
 static inline u64 fastrpc_sid_offset(struct fastrpc_channel_ctx *cctx,
 				     struct fastrpc_session_ctx *sctx)
 {
+	/* The IOVA already lies in the context bank's window */
+	if (cctx->sid_in_iova)
+		return 0;
 	return (u64)sctx->sid << cctx->soc_data->sid_pos;
+}
+
+/*
+ * With sid_in_iova, an address outside the session's window would reach the
+ * DSP without its SID and be routed somewhere else (an interconnect error
+ * that resets the SoC): refuse it instead.
+ */
+static bool fastrpc_iova_in_window(struct fastrpc_channel_ctx *cctx,
+				   struct fastrpc_session_ctx *sctx,
+				   dma_addr_t iova, u64 size)
+{
+	u64 start, end;
+
+	if (!cctx->sid_in_iova)
+		return true;
+	start = ((u64)sctx->sid << 32) + 0x80000000ULL;
+	end = ((u64)sctx->sid << 32) + 0xf8000000ULL;
+
+	return iova >= start && iova < end && size <= end - iova;
 }
 
 static void fastrpc_free_map(struct kref *ref)
@@ -517,6 +543,14 @@ static int fastrpc_buf_alloc(struct fastrpc_user *fl, struct device *dev,
 		return ret;
 
 	buf = *obuf;
+
+	if (fl->sctx && !fastrpc_iova_in_window(fl->cctx, fl->sctx, buf->dma_addr, size)) {
+		dev_err(dev, "buffer at %pad is outside the session's IOVA window\n",
+			&buf->dma_addr);
+		fastrpc_buf_free(buf);
+		*obuf = NULL;
+		return -ERANGE;
+	}
 
 	if (fl->sctx && fl->sctx->sid)
 		buf->dma_addr += fastrpc_sid_offset(fl->cctx, fl->sctx);
@@ -927,6 +961,13 @@ static int fastrpc_map_attach(struct fastrpc_user *fl, int fd,
 		dev_dbg(sess->dev, "Bad size passed len 0x%llx map size 0x%llx\n",
 				len, map->size);
 		err = -EINVAL;
+		goto map_err;
+	}
+	if (!(attr & FASTRPC_ATTR_SECUREMAP) &&
+	    !fastrpc_iova_in_window(fl->cctx, fl->sctx, map->dma_addr, map->size)) {
+		dev_err(sess->dev, "mapping at %pad is outside the session's IOVA window\n",
+			&map->dma_addr);
+		err = -ERANGE;
 		goto map_err;
 	}
 	map->va = sg_virt(map->table->sgl);
@@ -2410,7 +2451,22 @@ static int fastrpc_cb_probe(struct platform_device *pdev)
 		}
 	}
 	spin_unlock_irqrestore(&cctx->lock, flags);
-	rc = dma_set_mask(dev, DMA_BIT_MASK(dma_bits));
+	if (cctx->sid_in_iova) {
+		/*
+		 * The DSP reaches context bank N through IOVAs N << 32 and up,
+		 * and the SMMU translates them whole: allocate from the top of
+		 * that window, as downstream's 0x80000000-0xf7ffffff above
+		 * N << 32. The IOMMU allocator works down from the mask.
+		 */
+		if (!sid || sid > 0xf) {
+			dev_err(dev, "session ID %u has no IOVA window\n", sid);
+			return -EINVAL;
+		}
+		/* dma_alloc_coherent() allocates below the coherent mask */
+		rc = dma_set_mask_and_coherent(dev, ((u64)sid << 32) + 0xf7ffffffULL);
+	} else {
+		rc = dma_set_mask(dev, DMA_BIT_MASK(dma_bits));
+	}
 	if (rc) {
 		dev_err(dev, "%u-bit DMA enable failed\n", dma_bits);
 		return rc;
@@ -2599,6 +2655,13 @@ static int fastrpc_rpmsg_probe(struct rpmsg_device *rpdev)
 	secure_dsp = !(of_property_read_bool(rdev->of_node, "qcom,non-secure-domain"));
 	data->secure = secure_dsp;
 	data->soc_data = soc_data;
+	/*
+	 * SM8150's SLPI puts the context bank's SID in bits 32 and up of every
+	 * address it gets and the SMMU sees them: an IOVA below 4 GiB with
+	 * the SID added on top faults (fsr 0x402 at 0x1fffff000 for SID 1).
+	 */
+	data->sid_in_iova = domain_id == SDSP_DOMAIN_ID &&
+			    of_machine_is_compatible("qcom,sm8150");
 	data->poll_mode_supported = soc_data->poll_mode_supported ||
 		of_machine_get_match(fastrpc_poll_supported_machines);
 
