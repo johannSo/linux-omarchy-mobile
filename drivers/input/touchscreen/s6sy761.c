@@ -14,9 +14,12 @@
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/of.h>
 #include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
 #include <linux/spi/spi.h>
+#include <linux/string_choices.h>
 
 /* commands */
 #define S6SY761_SENSE_ON		0x10
@@ -31,6 +34,10 @@
 #define S6SY761_CLEAR_EVENT_STACK	0x62
 #define S6SY761_APPLICATION_MODE	0xe4
 #define S6SY761_TS_STATUS		0xaf
+#define S6SY761_MUTU_RAW_TYPE		0x70
+#define S6SY761_RAWDATA_SETLEN		0x75
+#define S6SY761_DELTA_READ		0x76
+#define S6SY761_HOVER_DETECT		0xee
 
 /* events */
 #define S6SY761_EVENT_INFO		0x02
@@ -100,6 +107,23 @@
 
 #define S6SY761_DEV_NAME	"s6sy761"
 
+/* mutual data types (S6SY761_MUTU_RAW_TYPE) */
+#define S6SY761_RAW_TYPE_SIGNAL		1
+#define S6SY761_RAW_TYPE_DELTA		60
+
+/*
+ * Ear detection: in its hover mode the controller senses a face up to about
+ * a centimetre above the glass, and its delta map (signed big-endian words,
+ * the earpiece end first) shows it. Measured over the upper half of a
+ * 17 x 37 panel: nodes above 20 number 0-1 with nothing near, 90-200 with an
+ * ear held to it and 280 and more with a cheek on the glass.
+ */
+#define S6SY761_PROX_POLL_MS		100
+#define S6SY761_PROX_NODE_MIN		20
+#define S6SY761_PROX_NEAR_NODES		50
+#define S6SY761_PROX_FAR_NODES		10
+#define S6SY761_PROX_FAR_POLLS		3	/* in a row, before "far" */
+
 /*
  * SPI framing of the Samsung S6SY7xx family (Pixel 6 Pro's S6SY79x), as in
  * Google's GPL sec_ts driver: a write is AA, length (2), 00 00, register,
@@ -145,6 +169,23 @@ struct s6sy761_data {
 
 	u16 devid;
 	u8 tx_channel;
+	u8 rx_channel;
+
+	/*
+	 * Who wants the controller sensing (the touchscreen and the
+	 * proximity switch are opened separately), the ear mode and the
+	 * proximity poll; held around each command sequence of the latter.
+	 */
+	struct mutex lock;
+	bool touch_open;
+	bool prox_open;
+	struct input_dev *prox;
+	struct delayed_work prox_work;
+	u8 *prox_map;
+	u16 prox_len;
+	u16 prox_half;
+	bool prox_near;
+	unsigned int prox_far_polls;
 
 	/* consecutive failed event reads; past a threshold, reset the chip */
 	unsigned int read_errors;
@@ -528,10 +569,9 @@ static int s6sy761_sense_on(struct s6sy761_data *sdata)
 	return ret ? ret : -EIO;
 }
 
-static int s6sy761_input_open(struct input_dev *dev)
+/* Called with sdata->lock held, when the first user opens. */
+static void s6sy761_start_sensing(struct s6sy761_data *sdata)
 {
-	struct s6sy761_data *sdata = input_get_drvdata(dev);
-
 	/*
 	 * A controller that doesn't answer (still booting after a resume, or
 	 * being reset) gets reset again rather than failing the open: a failed
@@ -539,6 +579,23 @@ static int s6sy761_input_open(struct input_dev *dev)
 	 */
 	if (s6sy761_sense_on(sdata))
 		schedule_delayed_work(&sdata->recover_work, 0);
+}
+
+/* Called with sdata->lock held, when the last user closes. */
+static void s6sy761_stop_sensing(struct s6sy761_data *sdata)
+{
+	if (sdata->bus->write(sdata, S6SY761_SENSE_OFF, NULL, 0))
+		dev_err(sdata->dev, "failed to turn off sensing\n");
+}
+
+static int s6sy761_input_open(struct input_dev *dev)
+{
+	struct s6sy761_data *sdata = input_get_drvdata(dev);
+
+	guard(mutex)(&sdata->lock);
+	sdata->touch_open = true;
+	if (!sdata->prox_open)
+		s6sy761_start_sensing(sdata);
 
 	return 0;
 }
@@ -546,11 +603,121 @@ static int s6sy761_input_open(struct input_dev *dev)
 static void s6sy761_input_close(struct input_dev *dev)
 {
 	struct s6sy761_data *sdata = input_get_drvdata(dev);
+
+	guard(mutex)(&sdata->lock);
+	sdata->touch_open = false;
+	if (!sdata->prox_open)
+		s6sy761_stop_sensing(sdata);
+}
+
+/* The hover mode and the delta map, or back to normal sensing. */
+static int s6sy761_ear_mode(struct s6sy761_data *sdata, bool on)
+{
+	u8 hover = on;
+	u8 type = on ? S6SY761_RAW_TYPE_DELTA : S6SY761_RAW_TYPE_SIGNAL;
 	int ret;
 
-	ret = sdata->bus->write(sdata, S6SY761_SENSE_OFF, NULL, 0);
+	ret = sdata->bus->write(sdata, S6SY761_HOVER_DETECT, &hover, 1);
+	if (!ret)
+		ret = sdata->bus->write(sdata, S6SY761_MUTU_RAW_TYPE, &type, 1);
 	if (ret)
-		dev_err(sdata->dev, "failed to turn off sensing\n");
+		dev_err(sdata->dev, "failed to turn the ear mode %s: %d\n",
+			str_on_off(on), ret);
+	return ret;
+}
+
+/*
+ * How many nodes of the upper half of the panel something covers. The whole
+ * map is read: after a shorter read the controller kept returning the same
+ * snapshot.
+ */
+static int s6sy761_prox_nodes(struct s6sy761_data *sdata)
+{
+	u8 len[2] = { sdata->prox_len >> 8, sdata->prox_len & 0xff };
+	int i, n = 0, ret;
+
+	ret = sdata->bus->write(sdata, S6SY761_RAWDATA_SETLEN, len, 2);
+	if (!ret)
+		ret = sdata->bus->read(sdata, S6SY761_DELTA_READ,
+				       sdata->prox_map, sdata->prox_len);
+	if (ret < 0)
+		return ret;
+
+	for (i = 0; i < sdata->prox_half; i += 2)
+		if ((s16)get_unaligned_be16(sdata->prox_map + i) >
+		    S6SY761_PROX_NODE_MIN)
+			n++;
+	return n;
+}
+
+static void s6sy761_prox_poll(struct work_struct *work)
+{
+	struct s6sy761_data *sdata = container_of(to_delayed_work(work),
+						  struct s6sy761_data,
+						  prox_work);
+	bool near = sdata->prox_near;
+	int n;
+
+	scoped_guard(mutex, &sdata->lock) {
+		if (!sdata->prox_open)
+			return;
+		n = s6sy761_prox_nodes(sdata);
+	}
+
+	if (n < 0) {
+		dev_err_ratelimited(sdata->dev, "failed to read the delta map: %d\n", n);
+	} else if (n >= S6SY761_PROX_NEAR_NODES) {
+		near = true;
+		sdata->prox_far_polls = 0;
+	} else if (n < S6SY761_PROX_FAR_NODES) {
+		if (++sdata->prox_far_polls >= S6SY761_PROX_FAR_POLLS)
+			near = false;
+	} else {
+		sdata->prox_far_polls = 0;
+	}
+
+	if (near != sdata->prox_near) {
+		sdata->prox_near = near;
+		input_report_switch(sdata->prox, SW_FRONT_PROXIMITY, near);
+		input_sync(sdata->prox);
+	}
+
+	schedule_delayed_work(&sdata->prox_work,
+			      msecs_to_jiffies(S6SY761_PROX_POLL_MS));
+}
+
+static int s6sy761_prox_open(struct input_dev *dev)
+{
+	struct s6sy761_data *sdata = input_get_drvdata(dev);
+
+	scoped_guard(mutex, &sdata->lock) {
+		sdata->prox_open = true;
+		if (!sdata->touch_open)
+			s6sy761_start_sensing(sdata);
+		s6sy761_ear_mode(sdata, true);
+		sdata->prox_near = false;
+		sdata->prox_far_polls = 0;
+	}
+
+	input_report_switch(sdata->prox, SW_FRONT_PROXIMITY, 0);
+	input_sync(sdata->prox);
+	schedule_delayed_work(&sdata->prox_work, 0);
+
+	return 0;
+}
+
+static void s6sy761_prox_close(struct input_dev *dev)
+{
+	struct s6sy761_data *sdata = input_get_drvdata(dev);
+
+	scoped_guard(mutex, &sdata->lock)
+		sdata->prox_open = false;
+	cancel_delayed_work_sync(&sdata->prox_work);
+
+	guard(mutex)(&sdata->lock);
+	s6sy761_ear_mode(sdata, false);
+	if (!sdata->touch_open)
+		s6sy761_stop_sensing(sdata);
 }
 
 static ssize_t s6sy761_sysfs_devid(struct device *dev,
@@ -669,6 +836,7 @@ static int s6sy761_hw_init(struct s6sy761_data *sdata,
 
 	/* if no tx channels defined, at least keep one */
 	sdata->tx_channel = max_t(u8, buffer[8], 1);
+	sdata->rx_channel = buffer[9];
 
 	ret = s6sy761_read_byte(sdata, S6SY761_FIRMWARE_INTEGRITY);
 	if (ret < 0)
@@ -738,8 +906,14 @@ static void s6sy761_recover(struct work_struct *work)
 				    ARRAY_SIZE(s6sy761_off_ms) - 1)]);
 
 	ret = s6sy761_hw_init(sdata, &max_x, &max_y);
-	if (!ret && input_device_enabled(sdata->input))
-		ret = s6sy761_sense_on(sdata);
+	scoped_guard(mutex, &sdata->lock) {
+		if (!ret && (sdata->touch_open || sdata->prox_open))
+			ret = s6sy761_sense_on(sdata);
+		if (!ret && sdata->prox_open) {
+			ret = s6sy761_ear_mode(sdata, true);
+			schedule_delayed_work(&sdata->prox_work, 0);
+		}
+	}
 	if (ret)
 		dev_err(sdata->dev, "reset failed: %d\n", ret);
 	else
@@ -779,6 +953,51 @@ static void s6sy761_stop_recovery(void *data)
 	cancel_delayed_work_sync(&sdata->recover_work);
 }
 
+/*
+ * The ear detection of OnePlus's firmware, as a proximity switch: a second
+ * input device whose open turns the hover mode on and starts the poll, so
+ * the controller runs as before unless something (a call) holds it open.
+ */
+static int s6sy761_prox_init(struct s6sy761_data *sdata)
+{
+	struct device *dev = sdata->dev;
+	int err;
+
+	if (!device_property_read_bool(dev, "samsung,ear-detect"))
+		return 0;
+
+	if (!sdata->rx_channel || sdata->tx_channel * sdata->rx_channel > 1024) {
+		dev_warn(dev, "no ear detection: panel of %u x %u lines\n",
+			 sdata->tx_channel, sdata->rx_channel);
+		return 0;
+	}
+
+	/* the upper half of the panel (the earpiece end) is counted */
+	sdata->prox_len = 2 * sdata->tx_channel * sdata->rx_channel;
+	sdata->prox_half = 2 * sdata->tx_channel * (sdata->rx_channel / 2);
+	sdata->prox_map = devm_kmalloc(dev, sdata->prox_len, GFP_KERNEL);
+	if (!sdata->prox_map)
+		return -ENOMEM;
+
+	err = devm_delayed_work_autocancel(dev, &sdata->prox_work,
+					   s6sy761_prox_poll);
+	if (err)
+		return err;
+
+	sdata->prox = devm_input_allocate_device(dev);
+	if (!sdata->prox)
+		return -ENOMEM;
+
+	sdata->prox->name = S6SY761_DEV_NAME " proximity";
+	sdata->prox->id.bustype = sdata->bus->bustype;
+	sdata->prox->open = s6sy761_prox_open;
+	sdata->prox->close = s6sy761_prox_close;
+	input_set_capability(sdata->prox, EV_SW, SW_FRONT_PROXIMITY);
+	input_set_drvdata(sdata->prox, sdata);
+
+	return input_register_device(sdata->prox);
+}
+
 static int s6sy761_probe_common(struct s6sy761_data *sdata)
 {
 	struct device *dev = sdata->dev;
@@ -786,6 +1005,10 @@ static int s6sy761_probe_common(struct s6sy761_data *sdata)
 	int err, i;
 
 	dev_set_drvdata(dev, sdata);
+
+	err = devm_mutex_init(dev, &sdata->lock);
+	if (err)
+		return err;
 
 	sdata->reset = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
 	if (IS_ERR(sdata->reset))
@@ -869,6 +1092,10 @@ static int s6sy761_probe_common(struct s6sy761_data *sdata)
 	if (err)
 		return err;
 
+	err = s6sy761_prox_init(sdata);
+	if (err)
+		return err;
+
 	err = devm_request_threaded_irq(dev, sdata->irq, NULL,
 					s6sy761_irq_handler,
 					IRQF_TRIGGER_LOW | IRQF_ONESHOT,
@@ -944,6 +1171,8 @@ static int s6sy761_suspend(struct device *dev)
 	 */
 	disable_irq(sdata->irq);
 	cancel_delayed_work_sync(&sdata->recover_work);
+	if (sdata->prox)
+		cancel_delayed_work_sync(&sdata->prox_work);
 	sdata->recover_tries = 0;
 	s6sy761_rails_off(sdata);
 
@@ -965,9 +1194,16 @@ static int s6sy761_resume(struct device *dev)
 	}
 
 	guard(mutex)(&sdata->input->mutex);
+	guard(mutex)(&sdata->lock);
 
-	if (input_device_enabled(sdata->input) && s6sy761_sense_on(sdata))
+	if ((sdata->touch_open || sdata->prox_open) && s6sy761_sense_on(sdata)) {
 		schedule_delayed_work(&sdata->recover_work, 0);
+		return 0;
+	}
+	if (sdata->prox_open) {
+		s6sy761_ear_mode(sdata, true);
+		schedule_delayed_work(&sdata->prox_work, 0);
+	}
 
 	return 0;
 }
