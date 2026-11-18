@@ -290,6 +290,18 @@
 			qcom,use-guard-pages;
 		};
 	};
+
+	/*
+	 * The SLPI's sensors PD (its CHRE) takes a fatal error unless the APPS
+	 * side has a "sleepstate" outbound smp2p entry, as downstream's
+	 * smp2p-sleepstate driver provides. Nothing drives it yet.
+	 */
+	smp2p-slpi {
+		sleepstate {
+			qcom,entry-name = "sleepstate";
+			#qcom,smem-state-cells = <1>;
+		};
+	};
 };
 
 /*
@@ -433,14 +445,15 @@
 };
 
 /*
- * SLPI boots, but its sensor_process user PD hits its watchdog ~40 s later
- * ("USER-PD DOG detects stalled initialization"): nothing serves it the
- * sensor registry yet. Its SSR then collides with any modem recovery and
- * the SoC ends in crash dump mode. Off until sensors get their own step.
+ * The SLPI runs the sensors (Snapdragon Sensor Core: light, proximity,
+ * accelerometer, compass). Its sensor_process PD reads its registry and
+ * configs from Linux over FastRPC (hexagonrpcd, started by the device
+ * package when /dev/fastrpc-sdsp appears); without that it stalls and its
+ * watchdog restarts the SLPI about 40 s after boot.
  */
 &remoteproc_slpi {
 	firmware-name = "qcom/sm8150/oneplus/hotdog/slpi.mbn";
-	status = "disabled";
+	status = "okay";
 };
 
 /*
