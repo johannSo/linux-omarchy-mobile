@@ -397,6 +397,7 @@
 
 		touchscreen-size-x = <1440>;
 		touchscreen-size-y = <3120>;
+		samsung,ear-detect;
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&tp_irq_active &tp_rst_active &tp_1v8_active>;
